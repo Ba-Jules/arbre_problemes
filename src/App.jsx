@@ -8,7 +8,6 @@ import {
   onSnapshot,
   query,
   where,
-  orderBy,
   serverTimestamp,
   setDoc,
   getDoc,
@@ -16,26 +15,29 @@ import {
 } from "firebase/firestore";
 import { db } from "./firebase-config";
 
-import QRCodeGenerator from "./components/QRCodeGenerator";
-import ArbreProblemePresentation from "./components/ArbreProblemePresentation";
+import QRCodeGenerator from "./components/QRCodeGenerator.jsx";
+import ArbreProblemePresentation from "./components/ArbreProblemePresentation.jsx";
 
-// ---------- Styles & Constantes
+/* ---------- Styles & Constantes ---------- */
 const COLORS = {
-  problem: { bg: "#FF6B6B", text: "#FFFFFF", border: "#CC5252" }, // Rouge
-  causes: { bg: "#FFB6A6", text: "#1F2937", border: "#E08C7A" },  // Saumon
-  consequences: { bg: "#A7F3D0", text: "#065F46", border: "#6EE7B7" }, // Vert
+  problem: { bg: "#FF6B6B", text: "#FFFFFF", border: "#CC5252" },       // Rouge
+  causes: { bg: "#FFB6A6", text: "#1F2937", border: "#E08C7A" },        // Saumon
+  consequences: { bg: "#A7F3D0", text: "#065F46", border: "#6EE7B7" },  // Vert
 };
 
+const POSTIT_W = 220;
+const POSTIT_H = 82;
+
 export default function App() {
-  // --- Mode / Session
+  /* ---------- Mode / Session ---------- */
   const [mode, setMode] = useState("moderator");
   const [sessionId, setSessionId] = useState("PROBLEM-TREE-2025");
 
-  // --- Données
+  /* ---------- Données ---------- */
   const [postIts, setPostIts] = useState([]);
   const [connections, setConnections] = useState([]);
 
-  // --- UI
+  /* ---------- UI ---------- */
   const [selectedPostIt, setSelectedPostIt] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
@@ -48,23 +50,27 @@ export default function App() {
 
   const [isConnecting, setIsConnecting] = useState(false);
 
-  // --- Métadonnées session
+  // Édition
+  const [editingId, setEditingId] = useState(null);
+  const [editingText, setEditingText] = useState("");
+
+  /* ---------- Métadonnées session ---------- */
   const [projectName, setProjectName] = useState("");
   const [theme, setTheme] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
 
-  // --- Participant
+  /* ---------- Participant ---------- */
   const [participantName, setParticipantName] = useState(
     () => localStorage.getItem("participantName") || ""
   );
   const [selectedCategory, setSelectedCategory] = useState("problem");
   const [participantContent, setParticipantContent] = useState("");
 
-  // --- Refs
+  /* ---------- Refs ---------- */
   const treeAreaRef = useRef(null);
   const svgRef = useRef(null);
 
-  // URL participant
+  /* ---------- URL participant ---------- */
   const participantUrl = useMemo(() => {
     const url = new URL(window.location.href);
     url.searchParams.set("session", sessionId);
@@ -72,7 +78,7 @@ export default function App() {
     return url.toString();
   }, [sessionId]);
 
-  // ----------- Helpers Atelier
+  /* ---------- Helpers ---------- */
   const generateSessionId = () => {
     const now = new Date();
     const pad = (n) => String(n).padStart(2, "0");
@@ -106,19 +112,17 @@ export default function App() {
       // /postits
       const q1 = query(collection(db, "postits"), where("sessionId", "==", sessionId));
       const snap1 = await getDocs(q1);
-      const del1 = snap1.docs.map((d) => deleteDoc(doc(db, "postits", d.id)));
-      await Promise.allSettled(del1);
+      await Promise.allSettled(snap1.docs.map((d) => deleteDoc(doc(db, "postits", d.id))));
 
-      // /connections (si utilisée)
+      // /connections
       const q2 = query(collection(db, "connections"), where("sessionId", "==", sessionId));
       const snap2 = await getDocs(q2);
-      const del2 = snap2.docs.map((d) => deleteDoc(doc(db, "connections", d.id)));
-      await Promise.allSettled(del2);
+      await Promise.allSettled(snap2.docs.map((d) => deleteDoc(doc(db, "connections", d.id))));
 
-      // /sessions/{id}
+      // /sessions
       await deleteDoc(doc(db, "sessions", sessionId)).catch(() => {});
 
-      // /postits/{sessionId}-central (au cas où)
+      // /postits/{central}
       await deleteDoc(doc(db, "postits", `${sessionId}-central`)).catch(() => {});
 
       setPostIts([]);
@@ -128,15 +132,14 @@ export default function App() {
       setShowOnboarding(true);
     } catch (e) {
       console.error("Purge error:", e);
-      alert("Impossible de purger la session (droits ou réseau).");
+      alert("Impossible de purger la session.");
     }
   };
 
   const showIntro = () => setShowOnboarding(true);
-
   const toggleConnectionMode = () => setIsConnecting((v) => !v);
 
-  // ----------- URL params
+  /* ---------- URL params ---------- */
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const m = params.get("mode");
@@ -145,7 +148,7 @@ export default function App() {
     if (s) setSessionId(s);
   }, []);
 
-  // ----------- Charger métadonnées de session
+  /* ---------- Charger métadonnées de session ---------- */
   useEffect(() => {
     if (!sessionId) return;
     const sessionDoc = doc(db, "sessions", sessionId);
@@ -163,26 +166,24 @@ export default function App() {
       .catch(() => setShowOnboarding(true));
   }, [sessionId]);
 
-  // ----------- Listeners Firestore
+  /* ---------- Listeners Firestore (sans orderBy => plus d’index requis) ---------- */
   useEffect(() => {
     if (!sessionId) return;
 
-    const q1 = query(
-      collection(db, "postits"),
-      where("sessionId", "==", sessionId),
-      orderBy("timestamp", "asc")
-    );
+    const q1 = query(collection(db, "postits"), where("sessionId", "==", sessionId));
     const unsub1 = onSnapshot(q1, (snap) => {
       const items = [];
       snap.forEach((d) => items.push({ id: d.id, ...d.data() }));
+      // tri local par timestamp (si présent)
+      items.sort((a, b) => {
+        const ta = a.timestamp?.toMillis?.() ?? 0;
+        const tb = b.timestamp?.toMillis?.() ?? 0;
+        return ta - tb;
+      });
       setPostIts(items);
     });
 
-    const q2 = query(
-      collection(db, "connections"),
-      where("sessionId", "==", sessionId),
-      orderBy("timestamp", "asc")
-    );
+    const q2 = query(collection(db, "connections"), where("sessionId", "==", sessionId));
     const unsub2 = onSnapshot(q2, (snap) => {
       const items = [];
       snap.forEach((d) => items.push({ id: d.id, ...d.data() }));
@@ -195,7 +196,7 @@ export default function App() {
     };
   }, [sessionId]);
 
-  // ----------- Central unique
+  /* ---------- Central unique ---------- */
   useEffect(() => {
     if (!sessionId) return;
     const centralId = `${sessionId}-central`;
@@ -207,8 +208,8 @@ export default function App() {
           content: "Cliquez pour définir le problème central",
           author: "Modérateur",
           category: "problem",
-          x: 400,
-          y: 300,
+          x: 380,
+          y: 280,
           isInTree: true,
           isCentral: true,
           childIds: [],
@@ -218,7 +219,7 @@ export default function App() {
     });
   }, [sessionId]);
 
-  // ----------- Onboarding complete
+  /* ---------- Onboarding complete ---------- */
   const handleOnboardingComplete = async ({ projectName: p, theme: t }) => {
     const sessionDoc = doc(db, "sessions", sessionId);
     try {
@@ -242,7 +243,7 @@ export default function App() {
     }
   };
 
-  // ----------- CRUD Post-its
+  /* ---------- CRUD Post-its ---------- */
   const addPostItToFirebase = async (
     content,
     category,
@@ -252,10 +253,11 @@ export default function App() {
     isInTree = false
   ) => {
     if (!content?.trim()) return;
+
     const defaults = {
-      causes: { x: 100, y: Math.random() * 100 + 100 },
-      consequences: { x: 700, y: Math.random() * 100 + 100 },
-      problem: { x: 400, y: Math.random() * 100 + 100 },
+      causes: { x: 40, y: Math.random() * 140 + 60 },
+      consequences: { x: 760, y: Math.random() * 140 + 60 },
+      problem: { x: 380, y: Math.random() * 140 + 60 },
     };
     const pos = x !== null ? { x, y } : defaults[category] || defaults.problem;
 
@@ -274,7 +276,7 @@ export default function App() {
       });
     } catch (e) {
       console.error("Erreur ajout post-it:", e);
-      alert("⚠️ Impossible d’ajouter le post-it (réseau ou droits).");
+      alert("⚠️ Impossible d’ajouter le post-it.");
     }
   };
 
@@ -287,12 +289,10 @@ export default function App() {
   };
 
   const deletePostItFromFirebase = async (id) => {
-    if (id === `${sessionId}-central`) return; // on protège le central
+    if (id === `${sessionId}-central`) return; // Protège le central
     try {
       await deleteDoc(doc(db, "postits", id));
-      const related = connections.filter(
-        (c) => c.fromId === id || c.toId === id
-      );
+      const related = connections.filter((c) => c.fromId === id || c.toId === id);
       for (const conn of related) {
         await deleteDoc(doc(db, "connections", conn.id));
       }
@@ -301,7 +301,7 @@ export default function App() {
     }
   };
 
-  // ----------- Drag & Drop
+  /* ---------- Drag & Drop ---------- */
   const handleMouseDown = (e, postItId) => {
     if (mode !== "moderator") return;
     e.preventDefault();
@@ -318,14 +318,8 @@ export default function App() {
       if (!treeArea) return;
 
       const rect = treeArea.getBoundingClientRect();
-      const newX = Math.max(
-        0,
-        Math.min(rect.width - 200, e.clientX - rect.left - dragOffset.x)
-      );
-      const newY = Math.max(
-        0,
-        Math.min(rect.height - 50, e.clientY - rect.top - dragOffset.y)
-      );
+      const newX = Math.max(0, Math.min(rect.width - POSTIT_W, e.clientX - rect.left - dragOffset.x));
+      const newY = Math.max(0, Math.min(rect.height - POSTIT_H, e.clientY - rect.top - dragOffset.y));
 
       setPostIts((prev) =>
         prev.map((p) =>
@@ -351,27 +345,48 @@ export default function App() {
     };
   }, [handleMouseMove]);
 
-  // ----------- Rendus
+  /* ---------- Édition (double-clic) ---------- */
+  const startEditing = (p) => {
+    if (mode !== "moderator") return;
+    setEditingId(p.id);
+    setEditingText(p.content || "");
+  };
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditingText("");
+  };
+  const saveEditing = async () => {
+    if (!editingId) return;
+    await updatePostItInFirebase(editingId, { content: editingText.trim() });
+    cancelEditing();
+  };
+
+  /* ---------- Rendus ---------- */
   const renderPostIt = (postIt) => {
     const colors = COLORS[postIt.category] || COLORS.problem;
     return (
       <div
         key={postIt.id}
         className="absolute cursor-move select-none"
-        style={{ left: postIt.x, top: postIt.y, width: 200, minHeight: 50, zIndex: 2 }}
+        style={{
+          left: postIt.x,
+          top: postIt.y,
+          width: POSTIT_W,
+          height: POSTIT_H,
+          zIndex: 2,
+        }}
         onMouseDown={(e) => handleMouseDown(e, postIt.id)}
+        onDoubleClick={() => startEditing(postIt)}
+        title={mode === "moderator" ? "Double-clic pour éditer" : ""}
       >
         <div
-          className="rounded-lg p-3 shadow-lg border-2 relative"
+          className="rounded-lg p-2.5 shadow-lg border-2 relative overflow-hidden"
           style={{
             backgroundColor: colors.bg,
             color: colors.text,
             borderColor: colors.border,
             fontFamily: "'Arial Black', Arial, sans-serif",
-            fontSize: Math.max(
-              12,
-              Math.min(16, 200 / Math.max(1, (postIt.content || "").length / 10))
-            ),
+            lineHeight: 1.1,
           }}
         >
           {isConnecting && (
@@ -380,28 +395,21 @@ export default function App() {
             </div>
           )}
 
-          <div
-            className="font-bold leading-tight"
-            contentEditable={mode === "moderator" && !isConnecting}
-            suppressContentEditableWarning
-            onBlur={(e) =>
-              updatePostItInFirebase(postIt.id, {
-                content: e.currentTarget.textContent || "",
-              })
-            }
-          >
+          <div className="font-bold text-[13px] break-words whitespace-normal">
             {postIt.content}
           </div>
 
-          <div className="text-[10px] opacity-75 mt-1">{postIt.author}</div>
+          <div className="text-[10px] opacity-80 mt-1">{postIt.author}</div>
 
           {mode === "moderator" && (
             <button
+              type="button"
               className="absolute -top-1 -right-1 w-5 h-5 bg-black/70 text-white rounded-full text-xs"
               onClick={(ev) => {
                 ev.stopPropagation();
                 deletePostItFromFirebase(postIt.id);
               }}
+              title="Supprimer"
             >
               ×
             </button>
@@ -410,7 +418,8 @@ export default function App() {
           {mode === "moderator" &&
             (postIt.category === "causes" || postIt.category === "consequences") && (
               <button
-                className="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-white px-2 py-1 rounded-full text-[10px] font-bold shadow hover:bg-gray-100"
+                type="button"
+                className="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-white px-2 py-0.5 rounded-full text-[10px] font-bold shadow hover:bg-gray-100"
                 onClick={(e) => {
                   e.stopPropagation();
                   addPostItToFirebase(
@@ -418,7 +427,7 @@ export default function App() {
                     postIt.category,
                     "Modérateur",
                     postIt.x,
-                    postIt.y + 80,
+                    postIt.y + POSTIT_H + 16,
                     true
                   );
                 }}
@@ -452,10 +461,10 @@ export default function App() {
     });
 
     return lines.map((ln, i) => {
-      const x1 = (ln.from.x || 0) + 100;
-      const y1 = (ln.from.y || 0) + 25;
-      const x2 = (ln.to.x || 0) + 100;
-      const y2 = (ln.to.y || 0) + 25;
+      const x1 = (ln.from.x || 0) + POSTIT_W / 2;
+      const y1 = (ln.from.y || 0) + POSTIT_H / 2;
+      const x2 = (ln.to.x || 0) + POSTIT_W / 2;
+      const y2 = (ln.to.y || 0) + POSTIT_H / 2;
       const midX = (x1 + x2) / 2;
       const d = `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
       return (
@@ -466,13 +475,13 @@ export default function App() {
           stroke="#374151"
           strokeWidth="2"
           markerEnd="url(#arrowhead)"
-          opacity="0.9"
+          opacity="0.95"
         />
       );
     });
   };
 
-  // ----------- UI Participant
+  /* ---------- UI Participant ---------- */
   if (mode === "participant") {
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-50 p-4">
@@ -500,6 +509,7 @@ export default function App() {
               />
               <div className="flex gap-2 mt-4">
                 <button
+                  type="button"
                   onClick={() => {
                     if (!participantName.trim()) return;
                     localStorage.setItem("participantName", participantName);
@@ -511,6 +521,7 @@ export default function App() {
                   Continuer
                 </button>
                 <button
+                  type="button"
                   onClick={() => {
                     setParticipantName("Anonyme");
                     localStorage.setItem("participantName", "Anonyme");
@@ -550,6 +561,7 @@ export default function App() {
               </div>
 
               <button
+                type="button"
                 className="mt-4 w-full bg-indigo-600 text-white py-3 rounded-lg font-bold disabled:opacity-40"
                 disabled={!participantContent.trim()}
                 onClick={async () => {
@@ -573,7 +585,7 @@ export default function App() {
     );
   }
 
-  // ----------- Onboarding
+  /* ---------- Onboarding ---------- */
   if (showOnboarding) {
     return (
       <ArbreProblemePresentation
@@ -585,7 +597,7 @@ export default function App() {
     );
   }
 
-  // ----------- Modérateur
+  /* ---------- Modérateur ---------- */
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       {/* Entête */}
@@ -625,6 +637,7 @@ export default function App() {
 
             <div className="flex items-start gap-3">
               <button
+                type="button"
                 onClick={toggleConnectionMode}
                 className={`px-4 py-2 rounded-lg font-bold transition ${
                   isConnecting ? "bg-blue-600 text-white shadow-lg" : "bg-gray-200 text-gray-800"
@@ -634,6 +647,7 @@ export default function App() {
               </button>
 
               <button
+                type="button"
                 onClick={newSession}
                 className="px-3 py-2 rounded-lg font-bold bg-emerald-600 text-white"
                 title="Créer une nouvelle session vide"
@@ -642,6 +656,7 @@ export default function App() {
               </button>
 
               <button
+                type="button"
                 onClick={purgeCurrentSession}
                 className="px-3 py-2 rounded-lg font-bold bg-rose-600 text-white"
                 title="Supprimer toutes les données de la session courante"
@@ -650,6 +665,7 @@ export default function App() {
               </button>
 
               <button
+                type="button"
                 onClick={showIntro}
                 className="px-3 py-2 rounded-lg font-bold bg-gray-200 text-gray-800"
                 title="Revoir les slides d'introduction"
@@ -667,37 +683,32 @@ export default function App() {
       {/* Corps */}
       <div className="max-w-7xl mx-auto p-4 grid grid-cols-12 grid-rows-12 gap-2 h-[calc(100vh-120px)]">
         {/* CAUSES */}
-        <div className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 col-span-3 row-span-9 ${
-          panelStates.causes === "minimized" ? "opacity-30" : ""
-        }`}>
-          <PanelHeader
-            title="📝 Causes"
-            color={COLORS.causes.bg}
-            onAddPostIt={() => addPostItToFirebase("Nouvelle cause", "causes", "Modérateur")}
-            onToggle={() =>
-              setPanelStates((s) => ({
-                ...s,
-                causes: s.causes === "minimized" ? "normal" : "minimized",
-              }))
-            }
-          />
-          <div className="flex-1 p-4 overflow-hidden">
-            <div className="flex gap-3 overflow-x-auto h-full">
-              {postIts
-                .filter((p) => p.category === "causes" && !p.isInTree)
-                .map((p) => (
-                  <SidePostIt
-                    key={p.id}
-                    postIt={p}
-                    colors={COLORS.causes}
-                    onMouseDown={handleMouseDown}
-                    onDelete={deletePostItFromFirebase}
-                    isConnecting={isConnecting}
-                  />
-                ))}
-            </div>
-          </div>
-        </div>
+        <Panel
+          title="📝 Causes"
+          color={COLORS.causes.bg}
+          panelState={panelStates.causes}
+          onToggle={() =>
+            setPanelStates((s) => ({
+              ...s,
+              causes: s.causes === "minimized" ? "normal" : "minimized",
+            }))
+          }
+          onAdd={() => addPostItToFirebase("Nouvelle cause", "causes", "Modérateur")}
+          className="col-span-3 row-span-9"
+        >
+          {postIts
+            .filter((p) => p.category === "causes" && !p.isInTree)
+            .map((p) => (
+              <SidePostIt
+                key={p.id}
+                postIt={p}
+                colors={COLORS.causes}
+                onMouseDown={handleMouseDown}
+                onDelete={deletePostItFromFirebase}
+                isConnecting={isConnecting}
+              />
+            ))}
+        </Panel>
 
         {/* ARBRE */}
         <div className="col-span-6 row-span-12 bg-white rounded-lg shadow-lg border border-gray-300 flex flex-col">
@@ -723,71 +734,93 @@ export default function App() {
         </div>
 
         {/* CONSÉQUENCES */}
-        <div className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 col-span-3 row-span-9 ${
-          panelStates.consequences === "minimized" ? "opacity-30" : ""
-        }`}>
-          <PanelHeader
-            title="📈 Conséquences"
-            color={COLORS.consequences.bg}
-            onAddPostIt={() => addPostItToFirebase("Nouvelle conséquence", "consequences", "Modérateur")}
-            onToggle={() =>
-              setPanelStates((s) => ({
-                ...s,
-                consequences: s.consequences === "minimized" ? "normal" : "minimized",
-              }))
-            }
-          />
-          <div className="flex-1 p-4 overflow-hidden">
-            <div className="flex gap-3 overflow-x-auto h-full">
-              {postIts
-                .filter((p) => p.category === "consequences" && !p.isInTree)
-                .map((p) => (
-                  <SidePostIt
-                    key={p.id}
-                    postIt={p}
-                    colors={COLORS.consequences}
-                    onMouseDown={handleMouseDown}
-                    onDelete={deletePostItFromFirebase}
-                    isConnecting={isConnecting}
-                  />
-                ))}
-            </div>
-          </div>
-        </div>
+        <Panel
+          title="📈 Conséquences"
+          color={COLORS.consequences.bg}
+          panelState={panelStates.consequences}
+          onToggle={() =>
+            setPanelStates((s) => ({
+              ...s,
+              consequences: s.consequences === "minimized" ? "normal" : "minimized",
+            }))
+          }
+          onAdd={() =>
+            addPostItToFirebase("Nouvelle conséquence", "consequences", "Modérateur")
+          }
+          className="col-span-3 row-span-9"
+        >
+          {postIts
+            .filter((p) => p.category === "consequences" && !p.isInTree)
+            .map((p) => (
+              <SidePostIt
+                key={p.id}
+                postIt={p}
+                colors={COLORS.consequences}
+                onMouseDown={handleMouseDown}
+                onDelete={deletePostItFromFirebase}
+                isConnecting={isConnecting}
+              />
+            ))}
+        </Panel>
 
         {/* PROBLÈMES (zone de préparation) */}
-        <div className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 col-span-12 row-span-3 ${
-          panelStates.problems === "minimized" ? "opacity-30" : ""
-        }`}>
-          <PanelHeader
-            title="🧩 Problèmes (zone de préparation)"
-            color={COLORS.problem.bg}
-            onAddPostIt={() => addPostItToFirebase("Nouveau problème", "problem", "Modérateur")}
-            onToggle={() =>
-              setPanelStates((s) => ({
-                ...s,
-                problems: s.problems === "minimized" ? "normal" : "minimized",
-              }))
-            }
-          />
-          <div className="flex-1 p-4 overflow-x-auto">
-            <div className="flex gap-3">
-              {postIts
-                .filter((p) => p.category === "problem" && !p.isInTree)
-                .map((p) => (
-                  <SidePostIt
-                    key={p.id}
-                    postIt={p}
-                    colors={COLORS.problem}
-                    onMouseDown={handleMouseDown}
-                    onDelete={deletePostItFromFirebase}
-                    isConnecting={isConnecting}
-                  />
-                ))}
+        <Panel
+          title="🧩 Problèmes (zone de préparation)"
+          color={COLORS.problem.bg}
+          panelState={panelStates.problems}
+          onToggle={() =>
+            setPanelStates((s) => ({
+              ...s,
+              problems: s.problems === "minimized" ? "normal" : "minimized",
+            }))
+          }
+          onAdd={() => addPostItToFirebase("Nouveau problème", "problem", "Modérateur")}
+          className="col-span-12 row-span-3"
+        >
+          {postIts
+            .filter((p) => p.category === "problem" && !p.isInTree)
+            .map((p) => (
+              <SidePostIt
+                key={p.id}
+                postIt={p}
+                colors={COLORS.problem}
+                onMouseDown={handleMouseDown}
+                onDelete={deletePostItFromFirebase}
+                isConnecting={isConnecting}
+              />
+            ))}
+        </Panel>
+      </div>
+
+      {/* Overlay édition */}
+      {editingId && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-2xl p-4 w-[520px] max-w-[94vw]">
+            <h3 className="font-black mb-2">Modifier le post-it</h3>
+            <textarea
+              className="w-full border rounded p-2 h-32"
+              value={editingText}
+              onChange={(e) => setEditingText(e.target.value)}
+            />
+            <div className="flex justify-end gap-2 mt-3">
+              <button
+                type="button"
+                className="px-3 py-2 rounded bg-gray-200"
+                onClick={cancelEditing}
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                className="px-3 py-2 rounded bg-emerald-600 text-white font-bold"
+                onClick={saveEditing}
+              >
+                Enregistrer
+              </button>
             </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Event handlers globaux */}
       <div className="fixed inset-0 pointer-events-none" onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} />
@@ -795,25 +828,37 @@ export default function App() {
   );
 }
 
-// ----------------- Petits composants
-function PanelHeader({ title, color, onAddPostIt, onToggle }) {
+/* ---------- Petits composants ---------- */
+
+function Panel({ title, color, onAdd, onToggle, panelState, className = "", children }) {
   return (
-    <div className="p-3 border-b flex items-center justify-between">
-      <div className="font-black" style={{ color }}>{title}</div>
-      <div className="flex gap-2">
-        <button
-          className="px-2 py-1 bg-white border rounded text-sm hover:bg-gray-50"
-          onClick={() => onAddPostIt?.()}
-        >
-          + Ajouter
-        </button>
-        <button
-          className="px-2 py-1 bg-white border rounded text-sm hover:bg-gray-50"
-          onClick={() => onToggle?.()}
-          title="Minimiser/Restaurer"
-        >
-          ↕
-        </button>
+    <div
+      className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 ${className} ${
+        panelState === "minimized" ? "opacity-30" : ""
+      }`}
+    >
+      <div className="p-3 border-b flex items-center justify-between">
+        <div className="font-black" style={{ color }}>{title}</div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="px-2 py-1 bg-white border rounded text-sm hover:bg-gray-50"
+            onClick={onAdd}
+          >
+            + Ajouter
+          </button>
+          <button
+            type="button"
+            className="px-2 py-1 bg-white border rounded text-sm hover:bg-gray-50"
+            onClick={onToggle}
+            title="Minimiser/Restaurer"
+          >
+            ↕
+          </button>
+        </div>
+      </div>
+      <div className="flex-1 p-3 overflow-x-auto">
+        <div className="flex gap-3">{children}</div>
       </div>
     </div>
   );
@@ -822,29 +867,39 @@ function PanelHeader({ title, color, onAddPostIt, onToggle }) {
 function SidePostIt({ postIt, colors, onMouseDown, onDelete, isConnecting }) {
   return (
     <div
-      className="p-3 rounded-lg cursor-move shadow-sm border-2 flex-shrink-0 min-w-[200px] group relative"
+      className="p-2.5 rounded-lg cursor-move shadow-sm border-2 flex-shrink-0 relative"
       style={{
         backgroundColor: colors.bg,
         color: colors.text,
         borderColor: colors.border,
         fontFamily: "'Arial Black', Arial, sans-serif",
+        width: POSTIT_W,
+        minHeight: POSTIT_H,
+        overflow: "hidden",
       }}
       onMouseDown={(e) => onMouseDown(e, postIt.id)}
+      title="Glissez vers l’arbre"
     >
-      <div className="font-bold text-sm">{postIt.content}</div>
-      <div className="text-xs mt-1 opacity-80">{postIt.author}</div>
-
-      {isConnecting ? (
+      {isConnecting && (
         <div className="absolute -top-1 -left-1 w-5 h-5 bg-blue-600 text-white rounded-full text-xs flex items-center justify-center">
           🔗
         </div>
-      ) : (
+      )}
+
+      <div className="font-bold text-[13px] break-words whitespace-normal">
+        {postIt.content}
+      </div>
+      <div className="text-xs mt-1 opacity-80">{postIt.author}</div>
+
+      {!isConnecting && (
         <button
-          className="absolute -top-1 -right-1 w-5 h-5 bg-black/70 text-white rounded-full text-xs opacity-0 group-hover:opacity-100"
+          type="button"
+          className="absolute -top-1 -right-1 w-5 h-5 bg-black/70 text-white rounded-full text-xs"
           onClick={(e) => {
             e.stopPropagation();
             onDelete?.(postIt.id);
           }}
+          title="Supprimer"
         >
           ×
         </button>
