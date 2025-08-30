@@ -1,5 +1,4 @@
 name: Deploy to Firebase Hosting
-
 on:
   push:
     branches: [ "main" ]
@@ -7,20 +6,20 @@ on:
 jobs:
   build_and_deploy:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
+          cache: "npm"
 
-      - name: Install deps (clean)
+      - name: Install deps
         run: npm ci
 
-      - name: Build Vite app
+      - name: Build
         run: npm run build
 
       - name: Install Firebase CLI
@@ -30,5 +29,4 @@ jobs:
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
         run: |
-          firebase use arbre-problemes-2025
-          firebase deploy --only hosting --non-interactive
+          firebase deploy --only hosting --project arbre-problemes-2025 --non-interactive
