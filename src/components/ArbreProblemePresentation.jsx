@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Play, X, QrCode } from "lucide-react";
-import QRCodeGenerator from "../QRCodeGenerator";
+import QRCodeGenerator from "./QRCodeGenerator";
 
 /**
  * Présentation + onboarding de l'Arbre à Problèmes
