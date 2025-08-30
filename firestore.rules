@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Règles pour les post-its
+    match /postits/{document=**} {
+      allow read, write: if true;
+    }
+    
+    // Règles pour les sessions
+    match /sessions/{document=**} {
+      allow read, write: if true;
+    }
+    
+    // Règles par défaut - lecture/écriture autorisée
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}
