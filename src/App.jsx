@@ -28,12 +28,12 @@ const POSTIT_W = 220;
 const POSTIT_H = 90;
 
 const CATEGORY_LABELS = {
-  problem: "ProblÃ¨me Central",
+  problem: "Problème Central",
   causes: "Causes",
-  consequences: "ConsÃ©quences",
+  consequences: "Conséquences",
 };
 
-/* Ã‰tats des panneaux: minimized | normal | maximized */
+/* États des panneaux: minimized | normal | maximized */
 const defaultPanelStates = {
   causes: "normal",
   tree: "normal",
@@ -47,11 +47,11 @@ export default function App() {
   const [mode, setMode] = useState("moderator"); // "moderator" | "participant"
   const [sessionId, setSessionId] = useState("PROBLEM-TREE-2025");
 
-  /* DonnÃ©es Firestore */
+  /* Données Firestore */
   const [postIts, setPostIts] = useState([]);
   const [connections, setConnections] = useState([]);
 
-  /* Ã‰tats UI */
+  /* États UI */
   const [panelStates, setPanelStates] = useState(defaultPanelStates);
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectSourceId, setConnectSourceId] = useState(null);
@@ -60,11 +60,11 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
-  /* Ã‰dition */
+  /* Édition */
   const [editingId, setEditingId] = useState(null);
   const [editingText, setEditingText] = useState("");
 
-  /* MÃ©tadonnÃ©es session */
+  /* Métadonnées session */
   const [projectName, setProjectName] = useState("");
   const [theme, setTheme] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -111,7 +111,7 @@ export default function App() {
     setConnections([]);
     setProjectName("");
     setTheme("");
-    setShowOnboarding(false); // on reste cÃ´tÃ© modÃ©rateur
+    setShowOnboarding(false); // on reste côté modérateur
 
     try {
       await setDoc(
@@ -120,6 +120,31 @@ export default function App() {
         { merge: true }
       );
     } catch {}
+  };
+
+  const purgeSession = async () => {
+    // Supprime tous les post-its & connexions de la session courante
+    try {
+      const pQ = query(collection(db, "postits"), where("sessionId", "==", sessionId));
+      const cQ = query(collection(db, "connections"), where("sessionId", "==", sessionId));
+
+      const unsubP = onSnapshot(pQ, async (snap) => {
+        const ops = [];
+        snap.forEach((d) => ops.push(deleteDoc(doc(db, "postits", d.id))));
+        await Promise.all(ops);
+      });
+      const unsubC = onSnapshot(cQ, async (snap) => {
+        const ops = [];
+        snap.forEach((d) => ops.push(deleteDoc(doc(db, "connections", d.id))));
+        await Promise.all(ops);
+      });
+
+      // Unsubscribe immédiatement (on a juste utilisé pour récupérer un snapshot instantané)
+      unsubP();
+      unsubC();
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   /* --------- URL params (mode / session) --------- */
@@ -131,7 +156,7 @@ export default function App() {
     if (s) setSessionId(s);
   }, []);
 
-  /* --------- Charger mÃ©tadonnÃ©es session --------- */
+  /* --------- Charger métadonnées session --------- */
   useEffect(() => {
     if (!sessionId) return;
     const ref = doc(db, "sessions", sessionId);
@@ -143,7 +168,7 @@ export default function App() {
           setTheme(data.theme || "");
           setShowOnboarding(false);
         } else {
-          setShowOnboarding(true); // premiÃ¨re fois, affiche slides
+          setShowOnboarding(true); // première fois, affiche slides
         }
       })
       .catch(() => setShowOnboarding(true));
@@ -153,7 +178,7 @@ export default function App() {
   useEffect(() => {
     if (!sessionId) return;
 
-    // Post-its (sans orderBy pour Ã©viter un index â€" tri cÃ´tÃ© client)
+    // Post-its (sans orderBy pour éviter un index — tri côté client)
     const qP = query(collection(db, "postits"), where("sessionId", "==", sessionId));
     const unsubP = onSnapshot(qP, (snap) => {
       const arr = [];
@@ -176,7 +201,7 @@ export default function App() {
     };
   }, [sessionId]);
 
-  /* --------- CrÃ©er le central automatique --------- */
+  /* --------- Créer le central automatique --------- */
   useEffect(() => {
     if (!sessionId) return;
     const centralId = `${sessionId}-central`;
@@ -185,8 +210,8 @@ export default function App() {
       if (!snap.exists()) {
         setDoc(ref, {
           sessionId,
-          content: "Cliquez pour dÃ©finir le problÃ¨me central",
-          author: "ModÃ©rateur",
+          content: "Cliquez pour définir le problème central",
+          author: "Modérateur",
           category: "problem",
           x: 420,
           y: 260,
@@ -224,7 +249,7 @@ export default function App() {
   ) => {
     if (!content?.trim()) return;
 
-    // positions par dÃ©faut (bords)
+    // positions par défaut (bords)
     const defaults = {
       causes: { x: 40, y: Math.random() * 140 + 60 },
       consequences: { x: 860, y: Math.random() * 140 + 60 },
@@ -247,7 +272,7 @@ export default function App() {
       });
     } catch (e) {
       console.error(e);
-      alert("âš ï¸ Impossible dâ€™ajouter le post-it.");
+      alert("⚠️ Impossible d’ajouter le post-it.");
     }
   };
 
@@ -260,10 +285,10 @@ export default function App() {
   };
 
   const deletePostItFromFirebase = async (id) => {
-    if (id === `${sessionId}-central`) return; // protÃ¨ge le central
+    if (id === `${sessionId}-central`) return; // protège le central
     try {
       await deleteDoc(doc(db, "postits", id));
-      // supprimer connexions liÃ©es
+      // supprimer connexions liées
       const rel = connections.filter((c) => c.fromId === id || c.toId === id);
       await Promise.all(rel.map((c) => deleteDoc(doc(db, "connections", c.id))));
     } catch (e) {
@@ -281,7 +306,7 @@ export default function App() {
       if (!connectSourceId) {
         setConnectSourceId(postItId);
       } else if (connectSourceId && connectSourceId !== postItId) {
-        // crÃ©er la connexion
+        // créer la connexion
         addDoc(collection(db, "connections"), {
           sessionId,
           fromId: connectSourceId,
@@ -289,9 +314,9 @@ export default function App() {
           createdAt: serverTimestamp(),
         }).catch(console.error);
         setConnectSourceId(null);
-        // on garde le mode connexion ON pour enchaÃ®ner si besoin
+        // on garde le mode connexion ON pour enchaîner si besoin
       } else {
-        // mÃªme id -> annule source
+        // même id -> annule source
         setConnectSourceId(null);
       }
       return;
@@ -368,15 +393,13 @@ export default function App() {
       const y1 = (ln.from.y || 0) + POSTIT_H / 2;
       const x2 = (ln.to.x || 0) + POSTIT_W / 2;
       const y2 = (ln.to.y || 0) + POSTIT_H / 2;
-      
-      // Connexions harmonieuses avec courbes
-      const dx = x2 - x1;
+
       const dy = y2 - y1;
       const midY = y1 + dy / 2;
-      
-      // Créer une ligne avec angle droit harmonieux
+
+      // angle droit harmonieux
       const d = `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
-      
+
       return (
         <path
           key={i}
@@ -437,14 +460,14 @@ export default function App() {
               className="w-6 h-6 bg-gray-200 hover:bg-gray-300 rounded-sm flex items-center justify-center text-gray-600 text-xs"
               title="Minimiser"
             >
-              âˆ'
+              −
             </button>
             <button
               onClick={() => (st === "maximized" ? restorePanels() : maximizePanel(panel))}
               className="w-6 h-6 bg-gray-200 hover:bg-gray-300 rounded-sm flex items-center justify-center text-gray-600 text-xs"
               title={st === "maximized" ? "Restaurer" : "Maximiser"}
             >
-              {st === "maximized" ? "â§‰" : "â–¡"}
+              {st === "maximized" ? "⧉" : "□"}
             </button>
           </div>
         </div>
@@ -471,7 +494,7 @@ export default function App() {
             ? connectSourceId
               ? "Cliquez la CIBLE"
               : "Cliquez la SOURCE"
-            : "Glissez pour dÃ©placer"
+            : "Glissez pour déplacer"
         }
       >
         <div
@@ -497,7 +520,7 @@ export default function App() {
                   setEditingText(p.content || "");
                 }}
               >
-                âœŽ
+                ✎
               </button>
               {p.isCentral !== true && (
                 <button
@@ -509,7 +532,7 @@ export default function App() {
                     deletePostItFromFirebase(p.id);
                   }}
                 >
-                  Ã—
+                  ×
                 </button>
               )}
             </div>
@@ -531,13 +554,11 @@ export default function App() {
                 addPostItToFirebase(
                   "Nouveau",
                   cat,
-                  "ModÃ©rateur",
+                  "Modérateur",
                   p.x,
                   Math.max(0, p.y - POSTIT_H - 16),
                   true
-                ).then(() => {
-                  // On ne relie pas automatiquement, on laisse le mode connexion gÃ©rer
-                });
+                );
               }}
               title="Ajouter un parent"
             >
@@ -555,7 +576,7 @@ export default function App() {
                 addPostItToFirebase(
                   "Nouveau",
                   cat,
-                  "ModÃ©rateur",
+                  "Modérateur",
                   p.x,
                   p.y + POSTIT_H + 16,
                   true
@@ -579,11 +600,11 @@ export default function App() {
       <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-50 p-4">
         <div className="max-w-md mx-auto">
           <div className="text-center mb-8">
-            <h1 className="text-2xl font-black text-gray-800 mb-1">ðŸŒ³ Arbre Ã  ProblÃ¨mes</h1>
+            <h1 className="text-2xl font-black text-gray-800 mb-1">🌳 Arbre à Problèmes</h1>
             <p className="text-gray-600 text-sm">Session: {sessionId}</p>
             {(projectName || theme) && (
               <p className="text-gray-700 font-bold mt-2">
-                {projectName} {theme ? "â€" " + theme : ""}
+                {projectName}{theme ? ` — ${theme}` : ""}
               </p>
             )}
           </div>
@@ -593,7 +614,7 @@ export default function App() {
               <h2 className="text-lg font-bold mb-4">Votre nom</h2>
               <input
                 type="text"
-                placeholder="Entrez votre nomâ€¦"
+                placeholder="Entrez votre nom…"
                 value={participantName}
                 onChange={(e) => setParticipantName(e.target.value)}
                 className="w-full p-3 border-2 border-gray-300 rounded-lg text-lg"
@@ -629,7 +650,7 @@ export default function App() {
           {participantName && (
             <div className="bg-white rounded-xl p-6 shadow-lg">
               <div className="mb-4">
-                <label className="block text-sm font-bold mb-2">CatÃ©gorie :</label>
+                <label className="block text-sm font-bold mb-2">Catégorie :</label>
                 <div className="grid grid-cols-1 gap-2">
                   {Object.keys(CATEGORY_LABELS).map((cat) => (
                     <button
@@ -655,7 +676,7 @@ export default function App() {
                 value={participantContent}
                 onChange={(e) => setParticipantContent(e.target.value)}
                 className="w-full p-3 border-2 border-gray-300 rounded-lg"
-                placeholder="Ã‰crivez votre contributionâ€¦"
+                placeholder="Écrivez votre contribution…"
               />
 
               <button
@@ -678,7 +699,7 @@ export default function App() {
               </button>
 
               <div className="mt-4 p-3 bg-gray-50 rounded-lg text-sm text-gray-600">
-                ConnectÃ© en tant que : <strong>{participantName}</strong>
+                Connecté en tant que : <strong>{participantName}</strong>
                 <button
                   onClick={() => {
                     setParticipantName("");
@@ -696,7 +717,7 @@ export default function App() {
     );
   }
 
-  /* Slides dâ€™intro */
+  /* Slides d’intro */
   if (showOnboarding) {
     return (
       <ArbreProblemePresentation
@@ -708,7 +729,7 @@ export default function App() {
     );
   }
 
-  /* ModÃ©rateur */
+  /* Modérateur */
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       {/* Header */}
@@ -716,14 +737,14 @@ export default function App() {
         <div className="max-w-7xl mx-auto flex flex-col gap-3">
           <div className="flex justify-between items-start gap-6">
             <div>
-              <h1 className="text-2xl font-black text-gray-900">ðŸŒ³ Arbre Ã  ProblÃ¨mes Collaboratif</h1>
+              <h1 className="text-2xl font-black text-gray-900">🌳 Arbre à Problèmes Collaboratif</h1>
               <p className="text-gray-600">Session: {sessionId}</p>
               {(projectName || theme) && (
                 <p className="text-sm text-gray-700 mt-1 font-bold">
-                  {projectName} {theme ? "â€" " + theme : ""}
+                  {projectName}{theme ? ` — ${theme}` : ""}
                 </p>
               )}
-              {/* Edition rapide Projet/ThÃ¨me */}
+              {/* Edition rapide Projet/Thème */}
               <div className="flex gap-2 mt-2">
                 <input
                   className="px-3 py-1 border rounded text-sm"
@@ -736,7 +757,7 @@ export default function App() {
                 />
                 <input
                   className="px-3 py-1 border rounded text-sm"
-                  placeholder="ThÃ¨me"
+                  placeholder="Thème"
                   value={theme}
                   onChange={(e) => setTheme(e.target.value)}
                   onBlur={async () => {
@@ -752,3 +773,236 @@ export default function App() {
                 onClick={() => {
                   setIsConnecting((v) => !v);
                   setConnectSourceId(null);
+                }}
+                className={`px-4 py-2 rounded-lg font-bold transition-all ${
+                  isConnecting ? "bg-blue-600 text-white shadow-lg scale-105" : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                }`}
+                title="Relier des post-its"
+              >
+                🔗 {isConnecting ? "Mode Connexion ON" : "Connecter Post-its"}
+              </button>
+
+              <button
+                type="button"
+                onClick={newSession}
+                className="px-3 py-2 bg-white border rounded hover:bg-gray-50"
+                title="Nouvelle session"
+              >
+                Nouvelle session
+              </button>
+
+              <button
+                type="button"
+                onClick={purgeSession}
+                className="px-3 py-2 bg-white border rounded hover:bg-gray-50"
+                title="Purger la session (effacer les post-its)"
+              >
+                Purger session
+              </button>
+
+              <div className="bg-white p-2 rounded-lg border">
+                <QRCodeGenerator url={participantUrl} title="Participants" />
+              </div>
+            </div>
+          </div>
+
+          {isConnecting && (
+            <div className="bg-blue-50 border-l-4 border-blue-400 p-3 rounded">
+              <div className="text-sm text-blue-800 font-semibold">
+                {!connectSourceId ? "1. Cliquez sur le post-it SOURCE" : "2. Cliquez sur le post-it CIBLE"}
+              </div>
+              <div className="text-xs text-blue-600 mt-1">Appuyez sur Échap pour annuler</div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Corps */}
+      <div className="max-w-7xl mx-auto p-4 grid grid-cols-12 grid-rows-12 gap-2 h-[calc(100vh-140px)]">
+        {/* Zone Causes */}
+        <div className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 ${getPanelClasses("causes", "col-span-3 row-span-9")}`}>
+          <PanelHeader
+            title="📝 Causes"
+            color={COLORS.causes.bg}
+            panel="causes"
+            onAdd={() => addPostItToFirebase("Nouvelle cause", "causes", "Modérateur")}
+          />
+          {panelStates.causes !== "minimized" && (
+            <div className="flex-1 p-4 overflow-hidden">
+              <div className="space-y-3 max-h-full overflow-y-auto">
+                {postIts
+                  .filter((p) => p.category === "causes" && !p.isInTree)
+                  .map((p) => (
+                    <div
+                      key={p.id}
+                      className="p-3 rounded-lg cursor-move shadow-sm border-2 group relative"
+                      style={{
+                        backgroundColor: COLORS.causes.bg,
+                        color: COLORS.causes.text,
+                        borderColor: COLORS.causes.border,
+                        fontFamily: "'Arial Black', Arial, sans-serif",
+                      }}
+                      onMouseDown={(e) => handleMouseDown(e, p.id)}
+                    >
+                      <div className="font-bold text-sm">{p.content}</div>
+                      <div className="text-xs mt-1 opacity-80">{p.author}</div>
+                      {!isConnecting && (
+                        <button
+                          className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white rounded-full text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deletePostItFromFirebase(p.id);
+                          }}
+                          title="Supprimer"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Zone Arbre */}
+        <div className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 ${getPanelClasses("tree", "col-span-6 row-span-9")}`}>
+          <PanelHeader title="🌳 Arbre à Problèmes" color="#374151" panel="tree" onAdd={() => {}} />
+          {panelStates.tree !== "minimized" && (
+            <div className="flex-1 relative overflow-hidden">
+              <div ref={treeAreaRef} className="w-full h-full relative">
+                {/* SVG connexions */}
+                <svg ref={svgRef} className="absolute inset-0 w-full h-full pointer-events-none" style={{ zIndex: 1 }}>
+                  <defs>
+                    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                      <polygon points="0 0, 10 3.5, 0 7" fill="#374151" />
+                    </marker>
+                  </defs>
+                  {renderConnections()}
+                </svg>
+
+                {/* Post-its de l'arbre */}
+                {postIts.filter((p) => p.isInTree).map(renderPostIt)}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Zone Conséquences */}
+        <div className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 ${getPanelClasses("consequences", "col-span-3 row-span-9")}`}>
+          <PanelHeader
+            title="📈 Conséquences"
+            color={COLORS.consequences.bg}
+            panel="consequences"
+            onAdd={() => addPostItToFirebase("Nouvelle conséquence", "consequences", "Modérateur")}
+          />
+          {panelStates.consequences !== "minimized" && (
+            <div className="flex-1 p-4 overflow-hidden">
+              <div className="space-y-3 max-h-full overflow-y-auto">
+                {postIts
+                  .filter((p) => p.category === "consequences" && !p.isInTree)
+                  .map((p) => (
+                    <div
+                      key={p.id}
+                      className="p-3 rounded-lg cursor-move shadow-sm border-2 group relative"
+                      style={{
+                        backgroundColor: COLORS.consequences.bg,
+                        color: COLORS.consequences.text,
+                        borderColor: COLORS.consequences.border,
+                        fontFamily: "'Arial Black', Arial, sans-serif",
+                      }}
+                      onMouseDown={(e) => handleMouseDown(e, p.id)}
+                    >
+                      <div className="font-bold text-sm">{p.content}</div>
+                      <div className="text-xs mt-1 opacity-80">{p.author}</div>
+                      {!isConnecting && (
+                        <button
+                          className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white rounded-full text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deletePostItFromFirebase(p.id);
+                          }}
+                          title="Supprimer"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Zone Problèmes suggérés */}
+        <div className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 ${getPanelClasses("problems", "col-span-12 row-span-3")}`}>
+          <PanelHeader
+            title="🎯 Problèmes Suggérés"
+            color={COLORS.problem.bg}
+            panel="problems"
+            onAdd={() => addPostItToFirebase("Nouveau problème", "problem", "Modérateur")}
+          />
+          {panelStates.problems !== "minimized" && (
+            <div className="flex-1 p-4 overflow-hidden">
+              <div className="flex gap-3 overflow-x-auto h-full">
+                {postIts
+                  .filter((p) => p.category === "problem" && !p.isInTree)
+                  .map((p) => (
+                    <div
+                      key={p.id}
+                      className="p-3 rounded-lg cursor-move shadow-sm border-2 flex-shrink-0 min-w-[200px] group relative"
+                      style={{
+                        backgroundColor: COLORS.problem.bg,
+                        color: COLORS.problem.text,
+                        borderColor: COLORS.problem.border,
+                        fontFamily: "'Arial Black', Arial, sans-serif",
+                      }}
+                      onMouseDown={(e) => handleMouseDown(e, p.id)}
+                    >
+                      <div className="font-bold text-sm">{p.content}</div>
+                      <div className="text-xs mt-1 opacity-80">{p.author}</div>
+                      {!isConnecting && (
+                        <button
+                          className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white rounded-full text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deletePostItFromFirebase(p.id);
+                          }}
+                          title="Supprimer"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Modale d'édition */}
+      {editingId && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl p-4 w-full max-w-lg">
+            <h3 className="font-bold text-lg mb-3">Modifier le post-it</h3>
+            <textarea
+              className="w-full border rounded p-2 h-32"
+              value={editingText}
+              onChange={(e) => setEditingText(e.target.value)}
+              autoFocus
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button className="px-3 py-2 bg-gray-200 rounded" onClick={cancelEditing}>
+                Annuler
+              </button>
+              <button className="px-3 py-2 bg-indigo-600 text-white rounded" onClick={saveEditing}>
+                Enregistrer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
