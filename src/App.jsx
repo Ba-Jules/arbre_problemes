@@ -1,3 +1,4 @@
+// App.jsx  — UTF-8
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
@@ -26,6 +27,11 @@ const COLORS = {
 
 const POSTIT_W = 220;
 const POSTIT_H = 90;
+const MAX_CHARS = 50;
+
+// Surface logique de l’arbre (indépendante du zoom)
+const CANVAS_W = 2400;
+const CANVAS_H = 1600;
 
 const CATEGORY_LABELS = {
   problem: "Problème Central",
@@ -76,8 +82,15 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState("problem");
   const [participantContent, setParticipantContent] = useState("");
 
+  /* Zoom arbre */
+  const [treeScale, setTreeScale] = useState(1); // 0.5 → 2
+  const treeScrollRef = useRef(null);
+
+  /* QR repliable */
+  const [qrOpen, setQrOpen] = useState(false);
+
   /* Refs */
-  const treeAreaRef = useRef(null);
+  const treeAreaRef = useRef(null); // conteneur "logique" (zone scalée)
   const svgRef = useRef(null);
 
   /* URL participant (QR) */
@@ -112,6 +125,7 @@ export default function App() {
     setProjectName("");
     setTheme("");
     setShowOnboarding(false); // on reste côté modérateur
+    setTreeScale(1);
 
     try {
       await setDoc(
@@ -120,31 +134,6 @@ export default function App() {
         { merge: true }
       );
     } catch {}
-  };
-
-  const purgeSession = async () => {
-    // Supprime tous les post-its & connexions de la session courante
-    try {
-      const pQ = query(collection(db, "postits"), where("sessionId", "==", sessionId));
-      const cQ = query(collection(db, "connections"), where("sessionId", "==", sessionId));
-
-      const unsubP = onSnapshot(pQ, async (snap) => {
-        const ops = [];
-        snap.forEach((d) => ops.push(deleteDoc(doc(db, "postits", d.id))));
-        await Promise.all(ops);
-      });
-      const unsubC = onSnapshot(cQ, async (snap) => {
-        const ops = [];
-        snap.forEach((d) => ops.push(deleteDoc(doc(db, "connections", d.id))));
-        await Promise.all(ops);
-      });
-
-      // Unsubscribe immédiatement (on a juste utilisé pour récupérer un snapshot instantané)
-      unsubP();
-      unsubC();
-    } catch (e) {
-      console.error(e);
-    }
   };
 
   /* --------- URL params (mode / session) --------- */
@@ -178,7 +167,7 @@ export default function App() {
   useEffect(() => {
     if (!sessionId) return;
 
-    // Post-its (sans orderBy pour éviter un index — tri côté client)
+    // Post-its (sans orderBy pour éviter index — tri côté client)
     const qP = query(collection(db, "postits"), where("sessionId", "==", sessionId));
     const unsubP = onSnapshot(qP, (snap) => {
       const arr = [];
@@ -213,8 +202,8 @@ export default function App() {
           content: "Cliquez pour définir le problème central",
           author: "Modérateur",
           category: "problem",
-          x: 420,
-          y: 260,
+          x: CANVAS_W / 2 - POSTIT_W / 2,
+          y: CANVAS_H / 2 - POSTIT_H / 2,
           isInTree: true,
           isCentral: true,
           childIds: [],
@@ -239,6 +228,8 @@ export default function App() {
   };
 
   /* ==================== CRUD Post-its ==================== */
+  const safeText = (txt) => (txt || "").toString().trim().slice(0, MAX_CHARS);
+
   const addPostItToFirebase = async (
     content,
     category,
@@ -247,20 +238,21 @@ export default function App() {
     y = null,
     isInTree = false
   ) => {
-    if (!content?.trim()) return;
+    const clean = safeText(content);
+    if (!clean) return;
 
     // positions par défaut (bords)
     const defaults = {
-      causes: { x: 40, y: Math.random() * 140 + 60 },
-      consequences: { x: 860, y: Math.random() * 140 + 60 },
-      problem: { x: 420, y: Math.random() * 140 + 60 },
+      causes: { x: 60, y: Math.random() * 140 + 60 },
+      consequences: { x: CANVAS_W - POSTIT_W - 60, y: Math.random() * 140 + 60 },
+      problem: { x: CANVAS_W / 2 - POSTIT_W / 2, y: Math.random() * 140 + 60 },
     };
     const pos = x !== null ? { x, y } : defaults[category] || defaults.problem;
 
     try {
       await addDoc(collection(db, "postits"), {
         sessionId,
-        content: content.trim(),
+        content: clean,
         author,
         category,
         x: pos.x,
@@ -278,7 +270,11 @@ export default function App() {
 
   const updatePostItInFirebase = async (id, fields) => {
     try {
-      await updateDoc(doc(db, "postits", id), fields);
+      const payload =
+        typeof fields.content === "string"
+          ? { ...fields, content: safeText(fields.content) }
+          : fields;
+      await updateDoc(doc(db, "postits", id), payload);
     } catch (e) {
       console.error(e);
     }
@@ -296,7 +292,7 @@ export default function App() {
     }
   };
 
-  /* ==================== Drag & Drop ==================== */
+  /* ==================== Drag & Drop (avec zoom) ==================== */
   const handleMouseDown = (e, postItId) => {
     if (mode !== "moderator") return;
     e.preventDefault();
@@ -314,7 +310,6 @@ export default function App() {
           createdAt: serverTimestamp(),
         }).catch(console.error);
         setConnectSourceId(null);
-        // on garde le mode connexion ON pour enchaîner si besoin
       } else {
         // même id -> annule source
         setConnectSourceId(null);
@@ -325,25 +320,33 @@ export default function App() {
     setSelectedPostIt(postItId);
     setIsDragging(true);
     const rect = e.currentTarget.getBoundingClientRect();
-    setDragOffset({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    setDragOffset({ x: (e.clientX - rect.left), y: (e.clientY - rect.top) });
   };
 
   const handleMouseMove = useCallback(
     (e) => {
       if (!isDragging || !selectedPostIt) return;
-      const area = treeAreaRef.current;
-      if (!area) return;
-      const rect = area.getBoundingClientRect();
+      const scroller = treeScrollRef.current;
+      if (!scroller) return;
+      const rect = scroller.getBoundingClientRect();
 
-      const newX = Math.max(0, Math.min(rect.width - POSTIT_W, e.clientX - rect.left - dragOffset.x));
-      const newY = Math.max(0, Math.min(rect.height - POSTIT_H, e.clientY - rect.top - dragOffset.y));
+      // Tenir compte du zoom + scroll
+      const scale = treeScale || 1;
+      const scrollX = scroller.scrollLeft;
+      const scrollY = scroller.scrollTop;
+
+      const rawX = (e.clientX - rect.left) + scrollX;
+      const rawY = (e.clientY - rect.top) + scrollY;
+
+      const newX = Math.max(0, Math.min(CANVAS_W - POSTIT_W, rawX / scale - dragOffset.x));
+      const newY = Math.max(0, Math.min(CANVAS_H - POSTIT_H, rawY / scale - dragOffset.y));
 
       setPostIts((prev) =>
         prev.map((p) => (p.id === selectedPostIt ? { ...p, x: newX, y: newY, isInTree: true } : p))
       );
       updatePostItInFirebase(selectedPostIt, { x: newX, y: newY, isInTree: true });
     },
-    [isDragging, selectedPostIt, dragOffset.x, dragOffset.y]
+    [isDragging, selectedPostIt, dragOffset.x, dragOffset.y, treeScale]
   );
 
   const handleMouseUp = () => {
@@ -372,11 +375,11 @@ export default function App() {
   };
   const saveEditing = async () => {
     if (!editingId) return;
-    await updatePostItInFirebase(editingId, { content: editingText.trim() });
+    await updatePostItInFirebase(editingId, { content: editingText });
     cancelEditing();
   };
 
-  /* ==================== Connexions (SVG) harmonieuses ==================== */
+  /* ==================== Connexions (SVG) ==================== */
   const renderConnections = () => {
     const byId = Object.fromEntries(postIts.map((p) => [p.id, p]));
     const lines = [];
@@ -394,10 +397,8 @@ export default function App() {
       const x2 = (ln.to.x || 0) + POSTIT_W / 2;
       const y2 = (ln.to.y || 0) + POSTIT_H / 2;
 
-      const dy = y2 - y1;
-      const midY = y1 + dy / 2;
-
-      // angle droit harmonieux
+      // angles droits harmonieux
+      const midY = y1 + (y2 - y1) / 2;
       const d = `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
 
       return (
@@ -408,7 +409,7 @@ export default function App() {
           stroke="#374151"
           strokeWidth="3"
           markerEnd="url(#arrowhead)"
-          opacity="0.85"
+          opacity="0.9"
           strokeLinecap="round"
           strokeLinejoin="round"
         />
@@ -432,23 +433,27 @@ export default function App() {
 
   const getPanelClasses = (panel, base) => {
     const st = panelStates[panel];
-    if (st === "maximized") return "col-span-12 row-span-12 z-50";
+    if (st === "maximized") return "col-span-12 row-span-12 z-40";
     if (st === "minimized") return "col-span-1 row-span-1 min-h-[40px]";
     return base;
   };
 
-  const PanelHeader = ({ title, color, panel, onAdd }) => {
+  const PanelHeader = ({ title, color, panel, onAdd, rightExtras }) => {
     const st = panelStates[panel];
     return (
       <div className="flex items-center justify-between p-2 border-b bg-gradient-to-r from-blue-50 to-blue-100 border-gray-300">
-        <h3 className="font-bold text-sm flex-1" style={{ color }}>
+        <h3
+          className="font-black text-sm flex-1"
+          style={{ color, fontFamily: "'Arial Black', Arial, sans-serif" }}
+        >
           {st === "minimized" ? title.split(" ")[0] : title}
         </h3>
         <div className="flex items-center gap-2">
-          {st !== "minimized" && (
+          {rightExtras}
+          {st !== "minimized" && onAdd && (
             <button
               onClick={onAdd}
-              className="w-6 h-6 bg-indigo-500 text-white rounded text-xs font-bold hover:bg-indigo-600 flex items-center justify-center"
+              className="w-6 h-6 bg-indigo-600 text-white rounded text-xs font-bold hover:bg-indigo-700 flex items-center justify-center"
               title="Ajouter post-it"
             >
               +
@@ -457,14 +462,14 @@ export default function App() {
           <div className="flex items-center gap-1">
             <button
               onClick={() => minimizePanel(panel)}
-              className="w-6 h-6 bg-gray-200 hover:bg-gray-300 rounded-sm flex items-center justify-center text-gray-600 text-xs"
+              className="w-6 h-6 bg-gray-200 hover:bg-gray-300 rounded-sm flex items-center justify-center text-gray-700 text-xs"
               title="Minimiser"
             >
               −
             </button>
             <button
               onClick={() => (st === "maximized" ? restorePanels() : maximizePanel(panel))}
-              className="w-6 h-6 bg-gray-200 hover:bg-gray-300 rounded-sm flex items-center justify-center text-gray-600 text-xs"
+              className="w-6 h-6 bg-gray-200 hover:bg-gray-300 rounded-sm flex items-center justify-center text-gray-700 text-xs"
               title={st === "maximized" ? "Restaurer" : "Maximiser"}
             >
               {st === "maximized" ? "⧉" : "□"}
@@ -539,10 +544,14 @@ export default function App() {
           )}
 
           {/* contenu */}
-          <div className="font-bold text-sm break-words whitespace-normal max-h-[50px] overflow-hidden pr-6">
+          <div
+            className="font-black text-[14px] break-words whitespace-normal max-h-[54px] overflow-hidden pr-6"
+            style={{ letterSpacing: 0.2 }}
+            title={p.content}
+          >
             {p.content}
           </div>
-          <div className="text-xs opacity-85 mt-1">{p.author}</div>
+          <div className="text-[11px] opacity-90 mt-1">{p.author}</div>
 
           {/* + parent haut */}
           {mode === "moderator" && !isConnecting && (
@@ -592,6 +601,21 @@ export default function App() {
     );
   };
 
+  /* ==================== Contrôles de zoom ==================== */
+  const zoomOut = () => setTreeScale((s) => Math.max(0.5, Math.round((s - 0.1) * 10) / 10));
+  const zoomIn = () => setTreeScale((s) => Math.min(2, Math.round((s + 0.1) * 10) / 10));
+  const zoomReset = () => setTreeScale(1);
+  const zoomFit = () => {
+    const scroller = treeScrollRef.current;
+    if (!scroller) return;
+    const vw = scroller.clientWidth;
+    const vh = scroller.clientHeight;
+    const s = Math.min(vw / CANVAS_W, vh / CANVAS_H);
+    setTreeScale(Math.min(1, Math.max(0.5, s)));
+    scroller.scrollLeft = 0;
+    scroller.scrollTop = 0;
+  };
+
   /* ==================== Vues ==================== */
 
   /* Participant */
@@ -604,7 +628,7 @@ export default function App() {
             <p className="text-gray-600 text-sm">Session: {sessionId}</p>
             {(projectName || theme) && (
               <p className="text-gray-700 font-bold mt-2">
-                {projectName}{theme ? ` — ${theme}` : ""}
+                {projectName} {theme ? " — " + theme : ""}
               </p>
             )}
           </div>
@@ -619,13 +643,14 @@ export default function App() {
                 onChange={(e) => setParticipantName(e.target.value)}
                 className="w-full p-3 border-2 border-gray-300 rounded-lg text-lg"
                 style={{ fontFamily: "'Arial Black', Arial, sans-serif" }}
+                maxLength={40}
               />
               <div className="flex gap-2 mt-4">
                 <button
                   type="button"
                   onClick={() => {
                     if (!participantName.trim()) return;
-                    localStorage.setItem("participantName", participantName);
+                    localStorage.setItem("participantName", participantName.trim());
                     setParticipantName(participantName.trim());
                   }}
                   className="flex-1 bg-indigo-600 text-white py-3 rounded-lg font-bold disabled:opacity-50"
@@ -674,9 +699,10 @@ export default function App() {
               <textarea
                 rows={5}
                 value={participantContent}
-                onChange={(e) => setParticipantContent(e.target.value)}
+                onChange={(e) => setParticipantContent(e.target.value.slice(0, MAX_CHARS))}
                 className="w-full p-3 border-2 border-gray-300 rounded-lg"
-                placeholder="Écrivez votre contribution…"
+                placeholder="Écrivez votre contribution… (50 caractères max)"
+                maxLength={MAX_CHARS}
               />
 
               <button
@@ -729,150 +755,171 @@ export default function App() {
     );
   }
 
-  /* Modérateur */
+  /* ==================== Modérateur ==================== */
+  const isTreeMaximized = panelStates.tree === "maximized";
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      {/* Header */}
-      <div className="bg-white shadow-sm p-4 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto flex flex-col gap-3">
-          <div className="flex justify-between items-start gap-6">
-            <div>
-              <h1 className="text-2xl font-black text-gray-900">🌳 Arbre à Problèmes Collaboratif</h1>
-              <p className="text-gray-600">Session: {sessionId}</p>
-              {(projectName || theme) && (
-                <p className="text-sm text-gray-700 mt-1 font-bold">
-                  {projectName}{theme ? ` — ${theme}` : ""}
-                </p>
-              )}
-              {/* Edition rapide Projet/Thème */}
-              <div className="flex gap-2 mt-2">
-                <input
-                  className="px-3 py-1 border rounded text-sm"
-                  placeholder="Nom du projet"
-                  value={projectName}
-                  onChange={(e) => setProjectName(e.target.value)}
-                  onBlur={async () => {
-                    await setDoc(doc(db, "sessions", sessionId), { projectName }, { merge: true });
-                  }}
-                />
-                <input
-                  className="px-3 py-1 border rounded text-sm"
-                  placeholder="Thème"
-                  value={theme}
-                  onChange={(e) => setTheme(e.target.value)}
-                  onBlur={async () => {
-                    await setDoc(doc(db, "sessions", sessionId), { theme }, { merge: true });
-                  }}
-                />
-              </div>
-            </div>
+      {/* Header (reste visible même en plein écran) */}
+      <div className="bg-white shadow-sm p-3 sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+          <div className="flex-1 min-w-0">
+            <h1 className="text-xl md:text-2xl font-black text-gray-900">
+              🌳 Arbre à Problèmes Collaboratif
+            </h1>
+            <div className="flex flex-wrap items-center gap-2 mt-1 text-sm">
+              <span className="text-gray-600">Session: {sessionId}</span>
 
-            <div className="flex items-start gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsConnecting((v) => !v);
-                  setConnectSourceId(null);
+              {/* Edition rapide Projet / Thème */}
+              <input
+                className="px-2 py-1 border rounded text-sm"
+                placeholder="Nom du projet"
+                value={projectName}
+                onChange={(e) => setProjectName(e.target.value)}
+                onBlur={async () => {
+                  await setDoc(doc(db, "sessions", sessionId), { projectName }, { merge: true });
                 }}
-                className={`px-4 py-2 rounded-lg font-bold transition-all ${
-                  isConnecting ? "bg-blue-600 text-white shadow-lg scale-105" : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                }`}
-                title="Relier des post-its"
-              >
-                🔗 {isConnecting ? "Mode Connexion ON" : "Connecter Post-its"}
-              </button>
-
-              <button
-                type="button"
-                onClick={newSession}
-                className="px-3 py-2 bg-white border rounded hover:bg-gray-50"
-                title="Nouvelle session"
-              >
-                Nouvelle session
-              </button>
-
-              <button
-                type="button"
-                onClick={purgeSession}
-                className="px-3 py-2 bg-white border rounded hover:bg-gray-50"
-                title="Purger la session (effacer les post-its)"
-              >
-                Purger session
-              </button>
-
-              <div className="bg-white p-2 rounded-lg border">
-                <QRCodeGenerator url={participantUrl} title="Participants" />
-              </div>
+              />
+              <input
+                className="px-2 py-1 border rounded text-sm"
+                placeholder="Thème"
+                value={theme}
+                onChange={(e) => setTheme(e.target.value)}
+                onBlur={async () => {
+                  await setDoc(doc(db, "sessions", sessionId), { theme }, { merge: true });
+                }}
+              />
             </div>
           </div>
 
-          {isConnecting && (
-            <div className="bg-blue-50 border-l-4 border-blue-400 p-3 rounded">
-              <div className="text-sm text-blue-800 font-semibold">
-                {!connectSourceId ? "1. Cliquez sur le post-it SOURCE" : "2. Cliquez sur le post-it CIBLE"}
-              </div>
-              <div className="text-xs text-blue-600 mt-1">Appuyez sur Échap pour annuler</div>
+          {/* Boutons à droite */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setIsConnecting((v) => !v);
+                setConnectSourceId(null);
+              }}
+              className={`px-3 py-2 rounded-lg font-bold transition ${
+                isConnecting ? "bg-blue-600 text-white" : "bg-gray-200 text-gray-800 hover:bg-gray-300"
+              }`}
+            >
+              {isConnecting ? "Mode Connexion ON" : "Connecter Post-its"}
+            </button>
+
+            <button
+              type="button"
+              onClick={newSession}
+              className="px-3 py-2 bg-gray-200 text-gray-800 rounded-lg font-bold hover:bg-gray-300"
+              title="Nouvelle session"
+            >
+              Nouvelle session
+            </button>
+
+            {/* QR compact */}
+            <div className="relative">
+              <button
+                type="button"
+                className="px-3 py-2 bg-gray-200 text-gray-800 rounded-lg font-bold hover:bg-gray-300"
+                onClick={() => setQrOpen((v) => !v)}
+                title="Afficher QR participants"
+              >
+                QR
+              </button>
+              {qrOpen && (
+                <div className="absolute right-0 mt-2 bg-white border rounded-lg shadow-xl p-3 z-50">
+                  <QRCodeGenerator text={participantUrl} />
+                  <div className="text-xs text-center mt-1 max-w-[220px] break-all">
+                    {participantUrl}
+                  </div>
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
       </div>
 
-      {/* Corps */}
-      <div className="max-w-7xl mx-auto p-4 grid grid-cols-12 grid-rows-12 gap-2 h-[calc(100vh-140px)]">
+      {/* Grille principale */}
+      <div className="max-w-7xl mx-auto p-3 grid grid-cols-12 grid-rows-12 gap-2 h-[calc(100vh-96px)]">
         {/* Zone Causes */}
         <div className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 ${getPanelClasses("causes", "col-span-3 row-span-9")}`}>
-          <PanelHeader
-            title="📝 Causes"
-            color={COLORS.causes.bg}
-            panel="causes"
-            onAdd={() => addPostItToFirebase("Nouvelle cause", "causes", "Modérateur")}
-          />
-          {panelStates.causes !== "minimized" && (
-            <div className="flex-1 p-4 overflow-hidden">
-              <div className="space-y-3 max-h-full overflow-y-auto">
-                {postIts
-                  .filter((p) => p.category === "causes" && !p.isInTree)
-                  .map((p) => (
-                    <div
-                      key={p.id}
-                      className="p-3 rounded-lg cursor-move shadow-sm border-2 group relative"
-                      style={{
-                        backgroundColor: COLORS.causes.bg,
-                        color: COLORS.causes.text,
-                        borderColor: COLORS.causes.border,
-                        fontFamily: "'Arial Black', Arial, sans-serif",
-                      }}
-                      onMouseDown={(e) => handleMouseDown(e, p.id)}
-                    >
-                      <div className="font-bold text-sm">{p.content}</div>
-                      <div className="text-xs mt-1 opacity-80">{p.author}</div>
-                      {!isConnecting && (
-                        <button
-                          className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white rounded-full text-xs opacity-0 group-hover:opacity-100 transition-opacity"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deletePostItFromFirebase(p.id);
-                          }}
-                          title="Supprimer"
-                        >
-                          ×
-                        </button>
-                      )}
-                    </div>
-                  ))}
+          {!isTreeMaximized && (
+            <PanelHeader
+              title="📝 Causes"
+              color={COLORS.causes.bg}
+              panel="causes"
+              onAdd={() => addPostItToFirebase("Nouvelle cause", "causes", "Modérateur")}
+            />
+          )}
+          {!isTreeMaximized && (
+            <div className="flex-1 p-3 overflow-auto">
+              <div className="space-y-3">
+                {postIts.filter(p => p.category === "causes" && !p.isInTree).map(p => (
+                  <div
+                    key={p.id}
+                    className="p-3 rounded-lg cursor-move shadow-sm border-2 group relative"
+                    style={{
+                      backgroundColor: COLORS.causes.bg,
+                      color: COLORS.causes.text,
+                      borderColor: COLORS.causes.border,
+                      fontFamily: "'Arial Black', Arial, sans-serif",
+                    }}
+                    onMouseDown={(e) => handleMouseDown(e, p.id)}
+                  >
+                    <div className="font-black text-sm">{p.content}</div>
+                    <div className="text-xs mt-1 opacity-90">{p.author}</div>
+                    {!isConnecting && (
+                      <button
+                        className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white rounded-full text-xs opacity-0 group-hover:opacity-100 transition"
+                        onClick={(e) => { e.stopPropagation(); deletePostItFromFirebase(p.id); }}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           )}
         </div>
 
-        {/* Zone Arbre */}
+        {/* Zone Arbre Central */}
         <div className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 ${getPanelClasses("tree", "col-span-6 row-span-9")}`}>
-          <PanelHeader title="🌳 Arbre à Problèmes" color="#374151" panel="tree" onAdd={() => {}} />
-          {panelStates.tree !== "minimized" && (
-            <div className="flex-1 relative overflow-hidden">
-              <div ref={treeAreaRef} className="w-full h-full relative">
+          <PanelHeader
+            title="🌳 Arbre à Problèmes"
+            color="#374151"
+            panel="tree"
+            rightExtras={
+              <div className="flex items-center gap-1">
+                <button className="px-2 py-1 bg-gray-200 rounded text-sm" onClick={zoomOut} title="Zoom -">−</button>
+                <button className="px-2 py-1 bg-gray-200 rounded text-sm" onClick={zoomReset} title="Zoom 100%">100%</button>
+                <button className="px-2 py-1 bg-gray-200 rounded text-sm" onClick={zoomFit} title="Ajuster à l'écran">Ajuster</button>
+                <button className="px-2 py-1 bg-gray-200 rounded text-sm" onClick={zoomIn} title="Zoom +">+</button>
+                <span className="ml-1 text-xs text-gray-600 w-10 text-right">{Math.round(treeScale * 100)}%</span>
+              </div>
+            }
+          />
+
+          {/* Conteneur scrollable + zoomé */}
+          <div ref={treeScrollRef} className="flex-1 relative overflow-auto">
+            <div
+              className="relative"
+              style={{
+                width: CANVAS_W,
+                height: CANVAS_H,
+                transform: `scale(${treeScale})`,
+                transformOrigin: "0 0",
+              }}
+            >
+              <div ref={treeAreaRef} className="absolute inset-0">
                 {/* SVG connexions */}
-                <svg ref={svgRef} className="absolute inset-0 w-full h-full pointer-events-none" style={{ zIndex: 1 }}>
+                <svg
+                  ref={svgRef}
+                  className="absolute inset-0 pointer-events-none"
+                  width={CANVAS_W}
+                  height={CANVAS_H}
+                  style={{ zIndex: 1 }}
+                >
                   <defs>
                     <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
                       <polygon points="0 0, 10 3.5, 0 7" fill="#374151" />
@@ -881,122 +928,114 @@ export default function App() {
                   {renderConnections()}
                 </svg>
 
-                {/* Post-its de l'arbre */}
-                {postIts.filter((p) => p.isInTree).map(renderPostIt)}
+                {/* Post-its dans l'arbre */}
+                {postIts.filter(p => p.isInTree).map(renderPostIt)}
               </div>
             </div>
-          )}
+          </div>
         </div>
 
         {/* Zone Conséquences */}
         <div className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 ${getPanelClasses("consequences", "col-span-3 row-span-9")}`}>
-          <PanelHeader
-            title="📈 Conséquences"
-            color={COLORS.consequences.bg}
-            panel="consequences"
-            onAdd={() => addPostItToFirebase("Nouvelle conséquence", "consequences", "Modérateur")}
-          />
-          {panelStates.consequences !== "minimized" && (
-            <div className="flex-1 p-4 overflow-hidden">
-              <div className="space-y-3 max-h-full overflow-y-auto">
-                {postIts
-                  .filter((p) => p.category === "consequences" && !p.isInTree)
-                  .map((p) => (
-                    <div
-                      key={p.id}
-                      className="p-3 rounded-lg cursor-move shadow-sm border-2 group relative"
-                      style={{
-                        backgroundColor: COLORS.consequences.bg,
-                        color: COLORS.consequences.text,
-                        borderColor: COLORS.consequences.border,
-                        fontFamily: "'Arial Black', Arial, sans-serif",
-                      }}
-                      onMouseDown={(e) => handleMouseDown(e, p.id)}
-                    >
-                      <div className="font-bold text-sm">{p.content}</div>
-                      <div className="text-xs mt-1 opacity-80">{p.author}</div>
-                      {!isConnecting && (
-                        <button
-                          className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white rounded-full text-xs opacity-0 group-hover:opacity-100 transition-opacity"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deletePostItFromFirebase(p.id);
-                          }}
-                          title="Supprimer"
-                        >
-                          ×
-                        </button>
-                      )}
-                    </div>
-                  ))}
+          {!isTreeMaximized && (
+            <PanelHeader
+              title="📈 Conséquences"
+              color={COLORS.consequences.bg}
+              panel="consequences"
+              onAdd={() => addPostItToFirebase("Nouvelle conséquence", "consequences", "Modérateur")}
+            />
+          )}
+          {!isTreeMaximized && (
+            <div className="flex-1 p-3 overflow-auto">
+              <div className="space-y-3">
+                {postIts.filter(p => p.category === "consequences" && !p.isInTree).map(p => (
+                  <div
+                    key={p.id}
+                    className="p-3 rounded-lg cursor-move shadow-sm border-2 group relative"
+                    style={{
+                      backgroundColor: COLORS.consequences.bg,
+                      color: COLORS.consequences.text,
+                      borderColor: COLORS.consequences.border,
+                      fontFamily: "'Arial Black', Arial, sans-serif",
+                    }}
+                    onMouseDown={(e) => handleMouseDown(e, p.id)}
+                  >
+                    <div className="font-black text-sm">{p.content}</div>
+                    <div className="text-xs mt-1 opacity-90">{p.author}</div>
+                    {!isConnecting && (
+                      <button
+                        className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white rounded-full text-xs opacity-0 group-hover:opacity-100 transition"
+                        onClick={(e) => { e.stopPropagation(); deletePostItFromFirebase(p.id); }}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           )}
         </div>
 
-        {/* Zone Problèmes suggérés */}
+        {/* Zone Problèmes Suggérés */}
         <div className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 ${getPanelClasses("problems", "col-span-12 row-span-3")}`}>
-          <PanelHeader
-            title="🎯 Problèmes Suggérés"
-            color={COLORS.problem.bg}
-            panel="problems"
-            onAdd={() => addPostItToFirebase("Nouveau problème", "problem", "Modérateur")}
-          />
-          {panelStates.problems !== "minimized" && (
-            <div className="flex-1 p-4 overflow-hidden">
-              <div className="flex gap-3 overflow-x-auto h-full">
-                {postIts
-                  .filter((p) => p.category === "problem" && !p.isInTree)
-                  .map((p) => (
-                    <div
-                      key={p.id}
-                      className="p-3 rounded-lg cursor-move shadow-sm border-2 flex-shrink-0 min-w-[200px] group relative"
-                      style={{
-                        backgroundColor: COLORS.problem.bg,
-                        color: COLORS.problem.text,
-                        borderColor: COLORS.problem.border,
-                        fontFamily: "'Arial Black', Arial, sans-serif",
-                      }}
-                      onMouseDown={(e) => handleMouseDown(e, p.id)}
-                    >
-                      <div className="font-bold text-sm">{p.content}</div>
-                      <div className="text-xs mt-1 opacity-80">{p.author}</div>
-                      {!isConnecting && (
-                        <button
-                          className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white rounded-full text-xs opacity-0 group-hover:opacity-100 transition-opacity"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deletePostItFromFirebase(p.id);
-                          }}
-                          title="Supprimer"
-                        >
-                          ×
-                        </button>
-                      )}
-                    </div>
-                  ))}
+          {!isTreeMaximized && (
+            <PanelHeader
+              title="🎯 Problèmes Suggérés"
+              color={COLORS.problem.bg}
+              panel="problems"
+              onAdd={() => addPostItToFirebase("Nouveau problème", "problem", "Modérateur")}
+            />
+          )}
+          {!isTreeMaximized && (
+            <div className="flex-1 p-3 overflow-auto">
+              <div className="flex gap-3">
+                {postIts.filter(p => p.category === "problem" && !p.isInTree).map(p => (
+                  <div
+                    key={p.id}
+                    className="p-3 rounded-lg cursor-move shadow-sm border-2 flex-shrink-0 min-w-[220px] group relative"
+                    style={{
+                      backgroundColor: COLORS.problem.bg,
+                      color: COLORS.problem.text,
+                      borderColor: COLORS.problem.border,
+                      fontFamily: "'Arial Black', Arial, sans-serif",
+                    }}
+                    onMouseDown={(e) => handleMouseDown(e, p.id)}
+                  >
+                    <div className="font-black text-sm">{p.content}</div>
+                    <div className="text-xs mt-1 opacity-90">{p.author}</div>
+                    {!isConnecting && (
+                      <button
+                        className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white rounded-full text-xs opacity-0 group-hover:opacity-100 transition"
+                        onClick={(e) => { e.stopPropagation(); deletePostItFromFirebase(p.id); }}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           )}
         </div>
       </div>
 
-      {/* Modale d'édition */}
+      {/* Modal édition simple */}
       {editingId && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl p-4 w-full max-w-lg">
-            <h3 className="font-bold text-lg mb-3">Modifier le post-it</h3>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl p-4 w-full max-w-md">
+            <h3 className="font-black text-lg mb-3">Modifier le post-it</h3>
             <textarea
-              className="w-full border rounded p-2 h-32"
               value={editingText}
-              onChange={(e) => setEditingText(e.target.value)}
-              autoFocus
+              onChange={(e) => setEditingText(e.target.value.slice(0, MAX_CHARS))}
+              maxLength={MAX_CHARS}
+              rows={4}
+              className="w-full p-3 border-2 border-gray-300 rounded-lg"
+              style={{ fontFamily: "'Arial Black', Arial, sans-serif" }}
             />
-            <div className="mt-3 flex justify-end gap-2">
-              <button className="px-3 py-2 bg-gray-200 rounded" onClick={cancelEditing}>
-                Annuler
-              </button>
-              <button className="px-3 py-2 bg-indigo-600 text-white rounded" onClick={saveEditing}>
+            <div className="flex justify-end gap-2 mt-3">
+              <button className="px-3 py-2 bg-gray-200 rounded" onClick={cancelEditing}>Annuler</button>
+              <button className="px-3 py-2 bg-indigo-600 text-white rounded font-bold" onClick={saveEditing}>
                 Enregistrer
               </button>
             </div>
