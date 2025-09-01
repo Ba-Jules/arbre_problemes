@@ -1,66 +1,121 @@
 import React, { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
-export default function QRCodeGenerator({ url, title = "Participants" }) {
+/**
+ * Génère un QR code fiable (canvas), avec:
+ * - re-rendu si l’URL change
+ * - bouton Télécharger (PNG)
+ * - bouton Copier le lien
+ * - fallback texte si le canvas n’est pas supporté
+ */
+export default function QRCodeGenerator({
+  url,
+  size = 180,
+  title = "QR participants",
+  className = "",
+}) {
   const canvasRef = useRef(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    if (!url) return;
-    setError(null);
+    let cancelled = false;
 
-    // On encode UNIQUEMENT l’URL (pas de JSON, pas de texte annexe)
-    QRCode.toCanvas(
-      canvasRef.current,
-      url,
-      {
+    async function render() {
+      setError(null);
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      // Quelques options utiles pour une meilleure lisibilité
+      const opts = {
         errorCorrectionLevel: "M",
         margin: 2,
-        scale: 6,
-        // couleurs neutres pour une meilleure lecture
-        color: { dark: "#000000", light: "#ffffff" },
-      },
-      (err) => {
-        if (err) setError(err.message || String(err));
+        scale: 8,
+        color: {
+          dark: "#000000",
+          light: "#ffffff",
+        },
+      };
+
+      try {
+        await QRCode.toCanvas(canvas, url || "", opts);
+        if (cancelled) return;
+      } catch (e) {
+        if (!cancelled) setError(e?.message || "Impossible de générer le QR");
       }
-    );
+    }
+
+    render();
+    return () => {
+      cancelled = true;
+    };
   }, [url]);
 
-  const copy = async () => {
+  const handleDownload = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const a = document.createElement("a");
+    a.download = "participants-qr.png";
+    a.href = canvas.toDataURL("image/png");
+    a.click();
+  };
+
+  const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(url);
-    } catch (e) {
-      console.warn("Copie impossible:", e);
+      await navigator.clipboard.writeText(url || "");
+      alert("Lien copié ✅");
+    } catch {
+      prompt("Copiez le lien :", url || "");
     }
   };
 
   return (
-    <div className="bg-white rounded-md shadow border p-3">
-      <details open>
-        <summary className="text-sm font-bold">QR participants</summary>
-        <div className="flex flex-col items-center gap-2 mt-2">
-          <canvas ref={canvasRef} aria-label="QR code participants" />
-          <div className="text-xs text-center font-bold">{title}</div>
+    <div className={`w-full ${className}`}>
+      <div className="text-xs font-semibold mb-2 flex items-center justify-between">
+        <span>▼ {title}</span>
+        <div className="flex gap-2">
           <button
-            className="text-xs px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
-            onClick={copy}
             type="button"
+            onClick={handleDownload}
+            className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300 text-xs"
+          >
+            PNG
+          </button>
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300 text-xs"
           >
             Copier le lien
           </button>
-          <a
-            href={url}
-            className="text-xs text-blue-600 underline break-all text-center"
-            target="_blank"
-            rel="noreferrer"
-          >
-            {url}
-          </a>
-          {error && (
-            <div className="text-xs text-red-600 mt-1">Erreur QR : {error}</div>
-          )}
         </div>
-      </details>
+      </div>
+
+      <div
+        className="bg-white border rounded p-3 flex items-center justify-center"
+        style={{ width: size + 20, height: size + 20 }}
+      >
+        {error ? (
+          <div className="text-xs text-red-600 text-center leading-snug">
+            {error}
+            <br />
+            <span className="text-[11px] text-gray-600">
+              (Vous pouvez toujours utiliser le bouton “Copier le lien”)
+            </span>
+          </div>
+        ) : (
+          <canvas
+            ref={canvasRef}
+            width={size}
+            height={size}
+            style={{ width: size, height: size }}
+            aria-label="QR code participants"
+          />
+        )}
+      </div>
+
+      <div className="mt-2 text-[11px] break-all leading-snug">
+        {url || ""}
+      </div>
     </div>
   );
 }

@@ -23,6 +23,7 @@ import { db } from "./firebase-config";
 
 // Composants locaux
 import QRCodeGenerator from "./components/QRCodeGenerator.jsx";
+import ColorPalette from "./components/ColorPalette.jsx";
 import AnalysisPanel from "./components/AnalysisPanel.jsx";
 
 /* ========================= Constantes UI ========================= */
