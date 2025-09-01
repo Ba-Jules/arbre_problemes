@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import {
   collection,
   addDoc,
@@ -10,40 +16,61 @@ import {
   where,
   serverTimestamp,
   setDoc,
-  getDoc,
+  getDoc
 } from "firebase/firestore";
 import { db } from "./firebase-config";
 
 import QRCodeGenerator from "./components/QRCodeGenerator.jsx";
-import AnalysisPanel from "./components/AnalysisPanel.jsx";
 import ArbreProblemePresentation from "./components/ArbreProblemePresentation.jsx";
+import AnalysisPanel from "./components/AnalysisPanel.jsx";
 
-/* ==================== UI & Constantes ==================== */
+/* ======= UI & Constantes ======= */
 const COLORS = {
   problem: { bg: "#ef4444", text: "#ffffff", border: "#dc2626" },
   causes: { bg: "#fb7185", text: "#ffffff", border: "#f43f5e" },
-  consequences: { bg: "#22c55e", text: "#ffffff", border: "#16a34a" },
+  consequences: { bg: "#22c55e", text: "#ffffff", border: "#16a34a" }
 };
-const CATEGORY_LABELS = {
-  problem: "Problème central",
-  causes: "Causes",
-  consequences: "Conséquences",
-};
+
 const POSTIT_W = 240;
 const POSTIT_H = 96;
 const MAX_CHARS = 50;
 
-/* ==================== App ==================== */
+const defaultPanelStates = {
+  causes: "normal",
+  tree: "normal",
+  consequences: "normal",
+  problems: "normal"
+};
+
+/* ======= Utils ======= */
+const debounce = (fn, ms = 300) => {
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+};
+
+const nowSessionId = () => {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `PROBLEM-TREE-${d.getFullYear()}${p(d.getMonth() + 1)}${p(
+    d.getDate()
+  )}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+};
+
+/* ======= App ======= */
 export default function App() {
-  /* Mode & session */
-  const [mode, setMode] = useState("moderator"); // 'moderator' | 'participant'
+  /* Mode via URL: moderator | participant | analysis */
+  const [mode, setMode] = useState("moderator");
   const [sessionId, setSessionId] = useState("PROBLEM-TREE-2025");
 
-  /* Données Firestore */
+  /* Données */
   const [postIts, setPostIts] = useState([]);
   const [connections, setConnections] = useState([]);
 
-  /* États UI */
+  /* UI / état */
+  const [panelStates, setPanelStates] = useState(defaultPanelStates);
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectSourceId, setConnectSourceId] = useState(null);
 
@@ -51,17 +78,7 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
-  // Zoom local à l’arbre (0.5–2)
-  const [zoom, setZoom] = useState(1);
-
-  // Panneaux utilitaires
-  const [showQR, setShowQR] = useState(false);
-
-  // Vue Analyse plein écran (via URL) ou embarquée (bouton)
-  const [showAnalysisInline, setShowAnalysisInline] = useState(false);
-  const [analysisViewOnly, setAnalysisViewOnly] = useState(false);
-
-  /* Édition */
+  /* Edition post-it */
   const [editingId, setEditingId] = useState(null);
   const [editingText, setEditingText] = useState("");
 
@@ -74,113 +91,85 @@ export default function App() {
   const [participantName, setParticipantName] = useState(
     () => localStorage.getItem("participantName") || ""
   );
-  const [tempName, setTempName] = useState("");
-  const [nameConfirmed, setNameConfirmed] = useState(!!(localStorage.getItem("participantName") || ""));
+  const [hasIdentified, setHasIdentified] = useState(
+    () => !!localStorage.getItem("participantName")
+  );
   const [selectedCategory, setSelectedCategory] = useState("problem");
   const [participantContent, setParticipantContent] = useState("");
 
-  /* Refs */
-  const treeWrapRef = useRef(null); // wrapper scrollable
-  const treeCanvasRef = useRef(null); // canvas zoomable
-  const svgRef = useRef(null);
+  /* Zoom & scroll de l’arbre */
+  const [zoom, setZoom] = useState(1); // 1 = 100%
+  const treeScrollRef = useRef(null);
+  const treeCanvasRef = useRef(null);
 
-  /* URL participant (QR) */
+  /* QR repliable */
+  const [qrOpen, setQrOpen] = useState(false);
+
+  /* Refs */
+  const treeAreaRef = useRef(null);
+
+  /* URL participant (stable, absolute) */
   const participantUrl = useMemo(() => {
-    const url = new URL(window.location.href);
+    const base = `${window.location.origin}${window.location.pathname}`;
+    const url = new URL(base);
     url.searchParams.set("session", sessionId);
     url.searchParams.set("mode", "participant");
     return url.toString();
   }, [sessionId]);
 
-  /* --------- Helpers --------- */
-  const generateSessionId = () => {
-    const d = new Date();
-    const p = (n) => String(n).padStart(2, "0");
-    return `PROBLEM-TREE-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(
-      d.getHours()
-    )}${p(d.getMinutes())}${p(d.getSeconds())}`;
-  };
-
-  const navigateToSession = (id) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("session", id);
-    // retire un éventuel view=analysis
-    url.searchParams.delete("view");
-    window.history.replaceState({}, "", url.toString());
-    setSessionId(id);
-  };
-
-  const newSession = async () => {
-    const id = generateSessionId();
-    navigateToSession(id);
-    setPostIts([]);
-    setConnections([]);
-    setProjectName("");
-    setTheme("");
-    setShowAnalysisInline(false);
-    setShowOnboarding(true); // affiche slides pour saisir projet/thème si on veut
-    try {
-      await setDoc(
-        doc(db, "sessions", id),
-        { sessionId: id, createdAt: serverTimestamp(), status: "active" },
-        { merge: true }
-      );
-    } catch {
-      /* noop */
-    }
-  };
-
-  /* --------- URL params (mode / session / view) --------- */
+  /* ======= URL params: appliquer mode + session ======= */
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const m = params.get("mode");
     const s = params.get("session");
-    const v = params.get("view");
-    if (m === "participant") setMode("participant");
+    if (m && ["moderator", "participant", "analysis"].includes(m)) {
+      setMode(m);
+    }
     if (s) setSessionId(s);
-    if (v === "analysis") setAnalysisViewOnly(true);
   }, []);
 
-  /* --------- Charger métadonnées session --------- */
+  /* ======= Charger métadonnées session (une fois par session) ======= */
   useEffect(() => {
     if (!sessionId) return;
-    (async () => {
-      try {
-        const ref = doc(db, "sessions", sessionId);
-        const snap = await getDoc(ref);
+    const ref = doc(db, "sessions", sessionId);
+    getDoc(ref)
+      .then((snap) => {
         if (snap.exists()) {
           const data = snap.data();
+          // On ne refait pas de set à chaque frappe : valeurs initiales seulement
           setProjectName(data.projectName || "");
           setTheme(data.theme || "");
           setShowOnboarding(false);
         } else {
-          // pas de métadonnées -> slides
+          // Première fois → slides
           setShowOnboarding(true);
         }
-      } catch {
-        setShowOnboarding(true);
-      }
-    })();
+      })
+      .catch(() => setShowOnboarding(true));
   }, [sessionId]);
 
-  /* --------- Listeners Firestore --------- */
+  /* ======= Listeners Firestore ======= */
   useEffect(() => {
     if (!sessionId) return;
 
-    const qP = query(collection(db, "postits"), where("sessionId", "==", sessionId));
+    const qP = query(
+      collection(db, "postits"),
+      where("sessionId", "==", sessionId)
+    );
     const unsubP = onSnapshot(qP, (snap) => {
       const arr = [];
       snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
-      // tri léger par timestamp si présent
       arr.sort(
         (a, b) =>
-          ((a.timestamp?.toMillis?.() || 0) - (b.timestamp?.toMillis?.() || 0)) ||
-          (a.content || "").localeCompare(b.content || "")
+          (a.timestamp?.toMillis?.() || 0) - (b.timestamp?.toMillis?.() || 0)
       );
       setPostIts(arr);
     });
 
-    const qC = query(collection(db, "connections"), where("sessionId", "==", sessionId));
+    const qC = query(
+      collection(db, "connections"),
+      where("sessionId", "==", sessionId)
+    );
     const unsubC = onSnapshot(qC, (snap) => {
       const arr = [];
       snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
@@ -193,9 +182,42 @@ export default function App() {
     };
   }, [sessionId]);
 
-  /* ==================== CRUD Post-its ==================== */
-  const hardTrim = (s) => (s || "").slice(0, MAX_CHARS);
+  /* ======= Nouvelle session (vide, sans post-it central auto) ======= */
+  const startNewSession = async () => {
+    const id = nowSessionId();
+    const url = new URL(window.location.href);
+    url.searchParams.set("session", id);
+    url.searchParams.delete("mode");
+    window.history.replaceState({}, "", url.toString());
+    setSessionId(id);
 
+    setPostIts([]);
+    setConnections([]);
+    setProjectName("");
+    setTheme("");
+    setShowOnboarding(true);
+
+    try {
+      await setDoc(
+        doc(db, "sessions", id),
+        { sessionId: id, createdAt: serverTimestamp(), status: "active" },
+        { merge: true }
+      );
+    } catch {}
+  };
+
+  /* ======= Enregistrement projet / thème (debounced) ======= */
+  const saveSessionMeta = useMemo(
+    () =>
+      debounce(async (fields) => {
+        try {
+          await setDoc(doc(db, "sessions", sessionId), fields, { merge: true });
+        } catch {}
+      }, 500),
+    [sessionId]
+  );
+
+  /* ======= CRUD Post-its ======= */
   const addPostItToFirebase = async (
     content,
     category,
@@ -204,21 +226,20 @@ export default function App() {
     y = null,
     isInTree = false
   ) => {
-    const safe = hardTrim(content || "");
-    if (!safe.trim()) return;
+    if (!content?.trim()) return;
+    const trimmed = content.trim().slice(0, MAX_CHARS);
 
-    // positions par défaut (bords)
     const defaults = {
-      causes: { x: 24, y: Math.random() * 140 + 40 },
-      consequences: { x: 1000, y: Math.random() * 140 + 40 },
-      problem: { x: 520, y: Math.random() * 140 + 40 },
+      causes: { x: 24, y: Math.random() * 160 + 48 },
+      consequences: { x: 1100, y: Math.random() * 160 + 48 },
+      problem: { x: 520, y: Math.random() * 160 + 48 }
     };
     const pos = x !== null ? { x, y } : defaults[category] || defaults.problem;
 
     try {
       await addDoc(collection(db, "postits"), {
         sessionId,
-        content: safe,
+        content: trimmed,
         author,
         category,
         x: pos.x,
@@ -226,7 +247,7 @@ export default function App() {
         isInTree,
         isCentral: false,
         childIds: [],
-        timestamp: serverTimestamp(),
+        timestamp: serverTimestamp()
       });
     } catch (e) {
       console.error(e);
@@ -236,7 +257,6 @@ export default function App() {
 
   const updatePostItInFirebase = async (id, fields) => {
     try {
-      if (fields.content != null) fields.content = hardTrim(fields.content);
       await updateDoc(doc(db, "postits", id), fields);
     } catch (e) {
       console.error(e);
@@ -247,18 +267,19 @@ export default function App() {
     try {
       await deleteDoc(doc(db, "postits", id));
       const rel = connections.filter((c) => c.fromId === id || c.toId === id);
-      await Promise.all(rel.map((c) => deleteDoc(doc(db, "connections", c.id))));
+      await Promise.all(
+        rel.map((c) => deleteDoc(doc(db, "connections", c.id)))
+      );
     } catch (e) {
       console.error(e);
     }
   };
 
-  /* ==================== Drag & Drop & Connexions ==================== */
+  /* ======= Drag & drop ======= */
   const handleMouseDown = (e, postItId) => {
     if (mode !== "moderator") return;
     e.preventDefault();
 
-    // mode connexion → clic source/cible
     if (isConnecting) {
       if (!connectSourceId) {
         setConnectSourceId(postItId);
@@ -267,7 +288,7 @@ export default function App() {
           sessionId,
           fromId: connectSourceId,
           toId: postItId,
-          createdAt: serverTimestamp(),
+          createdAt: serverTimestamp()
         }).catch(console.error);
         setConnectSourceId(null);
       } else {
@@ -278,149 +299,212 @@ export default function App() {
 
     setSelectedPostIt(postItId);
     setIsDragging(true);
-
-    // coord. dans le canvas zoomé
-    const node = e.currentTarget;
-    const rect = node.getBoundingClientRect();
-    setDragOffset({ x: (e.clientX - rect.left) / zoom, y: (e.clientY - rect.top) / zoom });
+    const rect = e.currentTarget.getBoundingClientRect();
+    setDragOffset({ x: e.clientX - rect.left, y: e.clientY - rect.top });
   };
 
-  const handleMouseMove = useCallback(
+  const onMove = useCallback(
     (e) => {
       if (!isDragging || !selectedPostIt) return;
-      const wrap = treeWrapRef.current;
-      const canvas = treeCanvasRef.current;
-      if (!wrap || !canvas) return;
+      const area = treeAreaRef.current;
+      if (!area) return;
 
-      const wrapRect = wrap.getBoundingClientRect();
-      const newX = Math.max(
-        0,
-        Math.min(
-          canvas.offsetWidth - POSTIT_W,
-          (e.clientX - wrapRect.left) / zoom - dragOffset.x + wrap.scrollLeft / zoom
-        )
-      );
-      const newY = Math.max(
-        0,
-        Math.min(
-          canvas.offsetHeight - POSTIT_H,
-          (e.clientY - wrapRect.top) / zoom - dragOffset.y + wrap.scrollTop / zoom
-        )
-      );
+      const rect = area.getBoundingClientRect();
+      // Compense le zoom
+      const dx = (e.clientX - rect.left - dragOffset.x) / zoom;
+      const dy = (e.clientY - rect.top - dragOffset.y) / zoom;
+
+      const newX = Math.max(0, Math.min(4000 - POSTIT_W, dx));
+      const newY = Math.max(0, Math.min(2500 - POSTIT_H, dy));
 
       setPostIts((prev) =>
-        prev.map((p) => (p.id === selectedPostIt ? { ...p, x: newX, y: newY, isInTree: true } : p))
+        prev.map((p) =>
+          p.id === selectedPostIt ? { ...p, x: newX, y: newY, isInTree: true } : p
+        )
       );
-      updatePostItInFirebase(selectedPostIt, { x: newX, y: newY, isInTree: true });
+      updatePostItInFirebase(selectedPostIt, {
+        x: newX,
+        y: newY,
+        isInTree: true
+      });
     },
     [isDragging, selectedPostIt, dragOffset.x, dragOffset.y, zoom]
   );
 
-  const handleMouseUp = () => {
+  const endDrag = useCallback(() => {
     setIsDragging(false);
     setSelectedPostIt(null);
-  };
-
-  useEffect(() => {
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [handleMouseMove]);
-
-  // Ctrl + molette pour zoomer la zone arbre
-  useEffect(() => {
-    const node = treeWrapRef.current;
-    if (!node) return;
-    const onWheel = (e) => {
-      if (!e.ctrlKey) return;
-      e.preventDefault();
-      setZoom((z) => {
-        const next = e.deltaY > 0 ? Math.max(0.5, z - 0.1) : Math.min(2, z + 0.1);
-        return +next.toFixed(2);
-      });
-    };
-    node.addEventListener("wheel", onWheel, { passive: false });
-    return () => node.removeEventListener("wheel", onWheel);
   }, []);
 
-  /* ==================== Connexions (SVG en angle droit) ==================== */
+  useEffect(() => {
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", endDrag);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", endDrag);
+    };
+  }, [onMove, endDrag]);
+
+  /* ======= Edition ======= */
+  const startEditing = (p) => {
+    if (mode !== "moderator") return;
+    setEditingId(p.id);
+    setEditingText((p.content || "").slice(0, MAX_CHARS));
+  };
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditingText("");
+  };
+  const saveEditing = async () => {
+    if (!editingId) return;
+    await updatePostItInFirebase(editingId, {
+      content: editingText.trim().slice(0, MAX_CHARS)
+    });
+    cancelEditing();
+  };
+
+  /* ======= Connexions (orthogonales) ======= */
   const renderConnections = () => {
     const byId = Object.fromEntries(postIts.map((p) => [p.id, p]));
     return connections.map((c) => {
       const a = byId[c.fromId];
       const b = byId[c.toId];
       if (!a || !b) return null;
-      const x1 = (a.x || 0) + POSTIT_W / 2;
-      const y1 = (a.y || 0) + POSTIT_H / 2;
-      const x2 = (b.x || 0) + POSTIT_W / 2;
-      const y2 = (b.y || 0) + POSTIT_H / 2;
+
+      const x1 = a.x + POSTIT_W / 2;
+      const y1 = a.y + POSTIT_H / 2;
+      const x2 = b.x + POSTIT_W / 2;
+      const y2 = b.y + POSTIT_H / 2;
+
       const midY = y1 + (y2 - y1) / 2;
       const d = `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
+
       return (
         <path
-          key={c.id}
+          key={`${c.fromId}-${c.toId}`}
           d={d}
           fill="none"
-          stroke="#334155"
-          strokeWidth="3"
+          stroke="#374151"
+          strokeWidth={3}
+          markerEnd="url(#arrowhead)"
+          opacity="0.9"
           strokeLinecap="round"
           strokeLinejoin="round"
-          markerEnd="url(#arrowhead)"
-          opacity="0.95"
         />
       );
     });
   };
 
-  /* ==================== Rendu Post-it ==================== */
-  const startEditing = (p) => {
-    if (mode !== "moderator") return;
-    setEditingId(p.id);
-    setEditingText(p.content || "");
-  };
-  const saveEditing = async () => {
-    if (!editingId) return;
-    await updatePostItInFirebase(editingId, { content: editingText.trim() });
-    setEditingId(null);
-    setEditingText("");
+  /* ======= Zoom handlers ======= */
+  const clampZoom = (z) => Math.max(0.25, Math.min(3, z));
+  const zoomIn = () => setZoom((z) => clampZoom(z + 0.25));
+  const zoomOut = () => setZoom((z) => clampZoom(z - 0.25));
+  const zoomReset = () => setZoom(1);
+  const zoomFit = () => {
+    // Fit horizontal dans le viewport actuel
+    const container = treeScrollRef.current;
+    if (!container) return;
+    const padding = 40;
+    const available = container.clientWidth - padding;
+    const needed = 1400; // largeur logique utile initiale du canvas
+    const z = clampZoom(available / needed);
+    setZoom(z);
   };
 
-  const CharCounter = ({ value }) => {
-    const left = Math.max(0, MAX_CHARS - (value?.length || 0));
+  const onWheel = (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -0.1 : 0.1;
+    setZoom((z) => clampZoom(z + delta));
+  };
+
+  /* ======= Panels helpers ======= */
+  const setPanelState = (panel, state) => {
+    setPanelStates((prev) => ({ ...prev, [panel]: state }));
+  };
+  const minimizePanel = (panel) => setPanelState(panel, "minimized");
+  const maximizePanel = (panel) =>
+    setPanelStates({
+      causes: panel === "causes" ? "maximized" : "minimized",
+      tree: panel === "tree" ? "maximized" : "minimized",
+      consequences: panel === "consequences" ? "maximized" : "minimized",
+      problems: panel === "problems" ? "maximized" : "minimized"
+    });
+  const restorePanels = () => setPanelStates(defaultPanelStates);
+
+  const getPanelClasses = (panel, base) => {
+    const st = panelStates[panel];
+    if (st === "maximized") return "col-span-12 row-span-12 z-40";
+    if (st === "minimized") return "col-span-1 row-span-1 min-h-[36px]";
+    return base;
+  };
+
+  const PanelHeader = ({ title, color, panel, onAdd }) => {
+    const st = panelStates[panel];
     return (
-      <span
-        className={`ml-2 text-[10px] font-semibold ${left <= 5 ? "text-red-600" : "text-slate-500"}`}
-        title="Caractères restants"
-      >
-        {left}
-      </span>
+      <div className="flex items-center justify-between px-2 py-1 border-b bg-gradient-to-r from-blue-50 to-blue-100 border-gray-300">
+        <h3 className="font-extrabold text-[13px] leading-none" style={{ color }}>
+          {st === "minimized" ? title.split(" ")[0] : title}
+        </h3>
+        <div className="flex items-center gap-2">
+          {st !== "minimized" && onAdd && (
+            <button
+              onClick={onAdd}
+              className="w-6 h-6 bg-indigo-500 text-white rounded text-xs font-bold hover:bg-indigo-600 flex items-center justify-center"
+              title="Ajouter post-it"
+            >
+              +
+            </button>
+          )}
+          <button
+            onClick={() => minimizePanel(panel)}
+            className="w-6 h-6 bg-gray-200 hover:bg-gray-300 rounded-sm flex items-center justify-center text-gray-600 text-xs"
+            title="Minimiser"
+          >
+            −
+          </button>
+          <button
+            onClick={() =>
+              st === "maximized" ? restorePanels() : maximizePanel(panel)
+            }
+            className="w-6 h-6 bg-gray-200 hover:bg-gray-300 rounded-sm flex items-center justify-center text-gray-600 text-xs"
+            title={st === "maximized" ? "Restaurer" : "Maximiser"}
+          >
+            {st === "maximized" ? "⧉" : "□"}
+          </button>
+        </div>
+      </div>
     );
   };
 
+  /* ======= Rendu d’un post-it dans l’arbre ======= */
   const renderPostIt = (p) => {
     const colors = COLORS[p.category] || COLORS.problem;
-    const connectHalo =
-      isConnecting && (connectSourceId === p.id ? "ring-4 ring-sky-400" : "ring-2 ring-emerald-300");
     const isEditing = editingId === p.id;
+    const highlight =
+      isConnecting && (connectSourceId === p.id ? "ring-4 ring-blue-400" : "ring-2 ring-green-300");
 
     return (
       <div
         key={p.id}
-        className={`absolute select-none transition-all ${
+        className={`absolute select-none transition-all duration-150 ${
           isConnecting ? "cursor-pointer" : "cursor-move"
-        } ${isConnecting ? connectHalo : ""}`}
+        } ${isConnecting ? highlight : ""}`}
         style={{
           left: p.x,
           top: p.y,
           width: POSTIT_W,
           height: POSTIT_H,
-          zIndex: 2,
+          zIndex: 2
         }}
         onMouseDown={(e) => handleMouseDown(e, p.id)}
-        title={isConnecting ? (connectSourceId ? "Cliquez la CIBLE" : "Cliquez la SOURCE") : ""}
+        title={
+          isConnecting
+            ? connectSourceId
+              ? "Cliquez la CIBLE"
+              : "Cliquez la SOURCE"
+            : "Glissez pour déplacer"
+        }
       >
         <div
           className="rounded-lg p-3 shadow-lg border-2 relative overflow-hidden"
@@ -429,15 +513,15 @@ export default function App() {
             color: colors.text,
             borderColor: colors.border,
             fontFamily: "'Arial Black', Arial, sans-serif",
-            lineHeight: 1.15,
+            lineHeight: 1.2
           }}
         >
-          {/* actions */}
+          {/* actions (crayon + supprimer) */}
           {mode === "moderator" && !isConnecting && (
             <div className="absolute -top-1 -right-1 flex gap-1">
               <button
                 type="button"
-                className="w-5 h-5 bg-black/70 text-white rounded-full text-[10px] flex items-center justify-center"
+                className="w-5 h-5 bg-black/70 text-white rounded-full text-xs flex items-center justify-center"
                 title="Modifier"
                 onClick={(ev) => {
                   ev.stopPropagation();
@@ -448,7 +532,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                className="w-5 h-5 bg-black/70 text-white rounded-full text-[11px] flex items-center justify-center"
+                className="w-5 h-5 bg-black/70 text-white rounded-full text-xs flex items-center justify-center"
                 title="Supprimer"
                 onClick={(ev) => {
                   ev.stopPropagation();
@@ -463,39 +547,42 @@ export default function App() {
           {/* contenu */}
           {!isEditing ? (
             <>
-              <div className="font-extrabold text-[13px] leading-tight break-words pr-6">{p.content}</div>
+              <div className="font-extrabold text-[14px] break-words whitespace-normal max-h-[54px] overflow-hidden pr-6">
+                {p.content}
+              </div>
               <div className="text-[11px] opacity-85 mt-1">{p.author}</div>
             </>
           ) : (
-            <div className="flex flex-col gap-1">
-              <input
-                autoFocus
-                className="w-full text-[13px] font-extrabold px-2 py-1 rounded bg-white/85 text-black"
+            <div className="space-y-1">
+              <textarea
+                className="w-full h-16 text-[14px] font-extrabold text-black rounded p-1"
+                maxLength={MAX_CHARS}
                 value={editingText}
-                onChange={(e) => setEditingText(hardTrim(e.target.value)))
+                onChange={(e) => setEditingText(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") saveEditing();
-                  if (e.key === "Escape") {
-                    setEditingId(null);
-                    setEditingText("");
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    saveEditing();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    cancelEditing();
                   }
                 }}
-                maxLength={MAX_CHARS}
+                autoFocus
               />
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] opacity-85">Modérateur</span>
-                <CharCounter value={editingText} />
+              <div className="text-[11px] text-white/90">
+                {editingText.length}/{MAX_CHARS}
               </div>
-              <div className="flex gap-2 mt-1">
-                <button className="px-2 py-1 text-[11px] rounded bg-white/80 text-black font-bold" onClick={saveEditing}>
-                  OK
+              <div className="flex gap-2">
+                <button
+                  className="px-2 py-1 bg-white text-black rounded text-xs font-bold"
+                  onClick={saveEditing}
+                >
+                  Enregistrer
                 </button>
                 <button
-                  className="px-2 py-1 text-[11px] rounded bg-black/60 text-white"
-                  onClick={() => {
-                    setEditingId(null);
-                    setEditingText("");
-                  }}
+                  className="px-2 py-1 bg-black/50 text-white rounded text-xs"
+                  onClick={cancelEditing}
                 >
                   Annuler
                 </button>
@@ -503,209 +590,114 @@ export default function App() {
             </div>
           )}
 
-          {/* + parent haut */}
+          {/* + parent / enfant */}
           {mode === "moderator" && !isConnecting && !isEditing && (
-            <button
-              className="absolute -top-2 left-1/2 -translate-x-1/2 w-6 h-6 bg-white text-black rounded-full text-sm font-bold shadow-md hover:bg-gray-100 flex items-center justify-center"
-              onClick={(e) => {
-                e.stopPropagation();
-                const cat = p.category === "causes" ? "causes" : "consequences";
-                addPostItToFirebase("Nouveau", cat, "Modérateur", p.x, Math.max(0, p.y - POSTIT_H - 16), true);
-              }}
-              title="Ajouter un parent"
-            >
-              +
-            </button>
-          )}
-
-          {/* + enfant bas */}
-          {mode === "moderator" && !isConnecting && !isEditing && (
-            <button
-              className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-6 h-6 bg-white text-black rounded-full text-sm font-bold shadow-md hover:bg-gray-100 flex items-center justify-center"
-              onClick={(e) => {
-                e.stopPropagation();
-                const cat = p.category === "consequences" ? "consequences" : "causes";
-                addPostItToFirebase("Nouveau", cat, "Modérateur", p.x, p.y + POSTIT_H + 16, true);
-              }}
-              title="Ajouter un enfant"
-            >
-              +
-            </button>
+            <>
+              <button
+                className="absolute -top-2 left-1/2 -translate-x-1/2 w-6 h-6 bg-white text-black rounded-full text-sm font-bold shadow-md hover:bg-gray-100 flex items-center justify-center"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const cat = p.category === "causes" ? "causes" : "consequences";
+                  addPostItToFirebase(
+                    "Nouveau",
+                    cat,
+                    "Modérateur",
+                    p.x,
+                    Math.max(0, p.y - POSTIT_H - 16),
+                    true
+                  );
+                }}
+                title="Ajouter un parent"
+              >
+                +
+              </button>
+              <button
+                className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-6 h-6 bg-white text-black rounded-full text-sm font-bold shadow-md hover:bg-gray-100 flex items-center justify-center"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const cat =
+                    p.category === "consequences" ? "consequences" : "causes";
+                  addPostItToFirebase(
+                    "Nouveau",
+                    cat,
+                    "Modérateur",
+                    p.x,
+                    p.y + POSTIT_H + 16,
+                    true
+                  );
+                }}
+                title="Ajouter un enfant"
+              >
+                +
+              </button>
+            </>
           )}
         </div>
       </div>
     );
   };
 
-  /* ==================== Header compact (1 ligne) ==================== */
-  const Header = () => {
-    // Lien pour ouvrir l'analyse en plein écran
-    const openAnalysisTab = () => {
-      const url = new URL(window.location.href);
-      url.searchParams.set("view", "analysis");
-      window.open(url.toString(), "_blank", "noopener,noreferrer");
-    };
+  /* ======= VUES ======= */
 
+  /* ANALYSE (si ouverte directement via l’URL) */
+  if (mode === "analysis") {
     return (
-      <div className="w-full bg-white border-b sticky top-0 z-50">
-        <div className="max-w-[1400px] mx-auto px-3 py-2 flex items-center gap-3 overflow-x-auto">
-          <div className="flex items-baseline gap-2 min-w-fit">
-            <span className="text-[18px] font-extrabold text-slate-800">🌳 Arbre à Problèmes</span>
-            {!analysisViewOnly && <span className="text-[12px] text-slate-500">Session: {sessionId}</span>}
-          </div>
-
-          {!analysisViewOnly && (
-            <div className="flex items-center gap-2 min-w-[380px]">
-              <input
-                className="px-3 py-2 text-[14px] font-bold border rounded w-[220px]"
-                placeholder="Nom du projet"
-                value={projectName}
-                onChange={(e) => setProjectName(e.target.value)}
-                onBlur={async () => {
-                  await setDoc(doc(db, "sessions", sessionId), { projectName }, { merge: true });
-                }}
-              />
-              <input
-                className="px-3 py-2 text-[14px] font-bold border rounded w-[200px]"
-                placeholder="Thème"
-                value={theme}
-                onChange={(e) => setTheme(e.target.value)}
-                onBlur={async () => {
-                  await setDoc(doc(db, "sessions", sessionId), { theme }, { merge: true });
-                }}
-              />
-            </div>
-          )}
-
-          <div className="flex items-center gap-2 ml-auto">
-            {!analysisViewOnly && (
-              <>
-                <button
-                  className={`px-3 py-2 rounded font-bold text-[12px] ${
-                    isConnecting ? "bg-sky-600 text-white" : "bg-slate-200 text-slate-900"
-                  }`}
-                  onClick={() => {
-                    setIsConnecting((v) => !v);
-                    setConnectSourceId(null);
-                  }}
-                  title="Relier des post-its (source → cible)"
-                >
-                  🔗 {isConnecting ? "Connexion ON" : "Connecter"}
-                </button>
-
-                <button
-                  className="px-3 py-2 rounded font-bold text-[12px] bg-slate-200 text-slate-900"
-                  onClick={newSession}
-                  title="Démarrer une session vide"
-                >
-                  Nouvelle session
-                </button>
-
-                <button
-                  className={`px-3 py-2 rounded font-bold text-[12px] ${
-                    showAnalysisInline ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-900"
-                  }`}
-                  onClick={() => setShowAnalysisInline((v) => !v)}
-                  title="Afficher l’analyse dans le panneau"
-                >
-                  Analyse
-                </button>
-
-                <button
-                  className="px-3 py-2 rounded font-bold text-[12px] bg-emerald-700 text-white"
-                  onClick={openAnalysisTab}
-                  title="Ouvrir l’analyse dans un nouvel onglet"
-                >
-                  ↗ Ouvrir Analyse
-                </button>
-
-                <button
-                  className={`px-3 py-2 rounded font-bold text-[12px] ${
-                    showQR ? "bg-indigo-600 text-white" : "bg-slate-200 text-slate-900"
-                  }`}
-                  onClick={() => setShowQR((v) => !v)}
-                  title="Afficher le QR participants"
-                >
-                  QR
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  /* ==================== Vues spéciales ==================== */
-
-  // Vue ANALYSE plein écran (si ?view=analysis)
-  if (analysisViewOnly) {
-    return (
-      <div className="min-h-screen flex flex-col bg-slate-50">
-        <Header />
-        <div className="max-w-[1200px] mx-auto w-full px-3 py-3">
-          <AnalysisPanel sessionId={sessionId} postIts={postIts} connections={connections} />
-        </div>
+      <div className="min-h-screen bg-white p-2">
+        <AnalysisPanel sessionId={sessionId} />
       </div>
     );
   }
 
-  // Slides d’intro (onboarding projet/thème)
-  if (showOnboarding && mode !== "participant") {
-    const onComplete = async ({ projectName: p, theme: t }) => {
-      try {
-        await setDoc(
-          doc(db, "sessions", sessionId),
-          { sessionId, projectName: p || "", theme: t || "", createdAt: serverTimestamp(), status: "active" },
-          { merge: true }
-        );
-      } catch {}
-      setProjectName(p || "");
-      setTheme(t || "");
-      setShowOnboarding(false);
-    };
-
-    return <ArbreProblemePresentation sessionId={sessionId} onComplete={onComplete} defaultProjectName={projectName} defaultTheme={theme} />;
-  }
-
-  /* ==================== Vues ==================== */
-
-  // Participant
+  /* PARTICIPANT */
   if (mode === "participant") {
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-50 p-4">
         <div className="max-w-md mx-auto">
           <div className="text-center mb-6">
-            <h1 className="text-2xl font-black text-gray-800 mb-1">🌳 Arbre à Problèmes</h1>
+            <h1 className="text-xl font-black text-gray-800 mb-1">
+              🌳 Arbre à Problèmes
+            </h1>
             <p className="text-gray-600 text-sm">Session: {sessionId}</p>
             {(projectName || theme) && (
-              <p className="text-gray-800 font-extrabold mt-2">
+              <p className="text-gray-800 font-bold mt-2">
                 {projectName} {theme ? " — " + theme : ""}
               </p>
             )}
           </div>
 
-          {!nameConfirmed && (
+          {!hasIdentified && (
             <div className="bg-white rounded-xl p-5 shadow-lg mb-6">
               <h2 className="text-lg font-bold mb-3">Votre nom</h2>
               <input
                 type="text"
                 placeholder="Entrez votre nom…"
-                value={tempName}
-                onChange={(e) => setTempName(e.target.value)}
-                className="w-full p-3 border-2 border-gray-300 rounded-lg text-lg"
+                value={participantName}
+                onChange={(e) => setParticipantName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && participantName.trim()) {
+                    localStorage.setItem(
+                      "participantName",
+                      participantName.trim()
+                    );
+                    setHasIdentified(true);
+                  }
+                }}
+                className="w-full p-3 border-2 border-gray-300 rounded-lg text-base"
+                style={{ fontFamily: "'Arial Black', Arial, sans-serif" }}
               />
               <div className="flex gap-2 mt-4">
                 <button
                   type="button"
                   onClick={() => {
-                    if (!tempName.trim()) return;
-                    localStorage.setItem("participantName", tempName.trim());
-                    setParticipantName(tempName.trim());
-                    setNameConfirmed(true);
+                    if (!participantName.trim()) return;
+                    localStorage.setItem(
+                      "participantName",
+                      participantName.trim()
+                    );
+                    setHasIdentified(true);
                   }}
                   className="flex-1 bg-indigo-600 text-white py-3 rounded-lg font-bold disabled:opacity-50"
-                  disabled={!tempName.trim()}
+                  disabled={!participantName.trim()}
                 >
                   Continuer
                 </button>
@@ -714,9 +706,9 @@ export default function App() {
                   onClick={() => {
                     localStorage.setItem("participantName", "Anonyme");
                     setParticipantName("Anonyme");
-                    setNameConfirmed(true);
+                    setHasIdentified(true);
                   }}
-                  className="px-4 bg-gray-200 text-gray-800 rounded-lg font-bold"
+                  className="flex-1 bg-gray-200 text-gray-800 py-3 rounded-lg font-bold"
                 >
                   Anonyme
                 </button>
@@ -724,48 +716,58 @@ export default function App() {
             </div>
           )}
 
-          {nameConfirmed && (
-            <div className="bg-white rounded-xl p-6 shadow-lg">
-              <div className="mb-4">
-                <label className="block text-sm font-bold mb-2">Catégorie :</label>
+          {hasIdentified && (
+            <div className="bg-white rounded-xl p-5 shadow-lg">
+              <div className="mb-3">
+                <label className="block text-sm font-bold mb-2">
+                  Catégorie :
+                </label>
                 <div className="grid grid-cols-1 gap-2">
-                  {Object.keys(CATEGORY_LABELS).map((cat) => (
+                  {Object.keys(COLORS).map((cat) => (
                     <button
                       key={cat}
                       onClick={() => setSelectedCategory(cat)}
                       className={`p-3 rounded-lg font-bold text-left ${
-                        selectedCategory === cat ? "ring-2 ring-offset-2 ring-indigo-500" : "hover:bg-gray-50"
+                        selectedCategory === cat
+                          ? "ring-2 ring-offset-2 ring-indigo-500"
+                          : "hover:bg-gray-50"
                       }`}
                       style={{
-                        backgroundColor: selectedCategory === cat ? COLORS[cat].bg : "#f9fafb",
-                        color: selectedCategory === cat ? COLORS[cat].text : "#374151",
-                        fontFamily: "'Arial Black', Arial, sans-serif",
+                        backgroundColor:
+                          selectedCategory === cat ? COLORS[cat].bg : "#f9fafb",
+                        color:
+                          selectedCategory === cat
+                            ? COLORS[cat].text
+                            : "#374151",
+                        fontFamily: "'Arial Black', Arial, sans-serif"
                       }}
                     >
-                      {CATEGORY_LABELS[cat]}
+                      {cat === "problem"
+                        ? "Problème central"
+                        : cat === "causes"
+                        ? "Causes"
+                        : "Conséquences"}
                     </button>
                   ))}
                 </div>
               </div>
 
-              <div className="mb-1 flex items-center justify-between">
-                <label className="text-sm font-bold">Votre idée (50 caractères max)</label>
-                <span className="text-xs text-slate-500">
-                  {Math.max(0, MAX_CHARS - (participantContent.length || 0))}
-                </span>
-              </div>
               <textarea
                 rows={4}
                 value={participantContent}
-                onChange={(e) => setParticipantContent(hardTrim(e.target.value))}
-                className="w-full p-3 border-2 border-gray-300 rounded-lg"
+                onChange={(e) =>
+                  setParticipantContent(e.target.value.slice(0, MAX_CHARS))
+                }
+                className="w-full p-3 border-2 border-gray-300 rounded-lg font-extrabold text-black"
                 placeholder="Écrivez votre contribution…"
-                maxLength={MAX_CHARS}
               />
+              <div className="text-xs text-gray-500 mt-1">
+                {participantContent.length}/{MAX_CHARS}
+              </div>
 
               <button
                 type="button"
-                className="mt-4 w-full bg-indigo-600 text-white py-3 rounded-lg font-bold disabled:opacity-40"
+                className="mt-3 w-full bg-indigo-600 text-white py-3 rounded-lg font-bold disabled:opacity-40"
                 disabled={!participantContent.trim()}
                 onClick={async () => {
                   await addPostItToFirebase(
@@ -782,12 +784,13 @@ export default function App() {
                 Envoyer
               </button>
 
-              <div className="mt-4 p-3 bg-gray-50 rounded-lg text-sm text-gray-600">
+              <div className="mt-3 p-3 bg-gray-50 rounded-lg text-sm text-gray-600">
                 Connecté en tant que : <strong>{participantName}</strong>
                 <button
                   onClick={() => {
-                    setTempName("");
-                    setNameConfirmed(false);
+                    setHasIdentified(false);
+                    setParticipantName("");
+                    localStorage.removeItem("participantName");
                   }}
                   className="text-xs text-indigo-600 ml-2 hover:underline"
                 >
@@ -801,193 +804,340 @@ export default function App() {
     );
   }
 
-  /* ==================== Interface Modérateur ==================== */
+  /* SLIDES D’INTRO */
+  if (showOnboarding) {
+    return (
+      <ArbreProblemePresentation
+        sessionId={sessionId}
+        onComplete={async ({ projectName: p, theme: t }) => {
+          await setDoc(
+            doc(db, "sessions", sessionId),
+            {
+              sessionId,
+              projectName: p || "",
+              theme: t || "",
+              createdAt: serverTimestamp(),
+              status: "active"
+            },
+            { merge: true }
+          );
+          setProjectName(p || "");
+          setTheme(t || "");
+          setShowOnboarding(false);
+        }}
+        defaultProjectName={projectName}
+        defaultTheme={theme}
+      />
+    );
+  }
+
+  /* MODÉRATEUR */
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50">
-    <Header />
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+      {/* Header compact sur 1 ligne */}
+      <div className="bg-white shadow-sm px-3 py-2 sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto flex items-center gap-3">
+          <h1 className="text-[15px] font-black text-gray-900 whitespace-nowrap">
+            🌳 Arbre à Problèmes
+          </h1>
 
-    <div className="max-w-[1400px] mx-auto w-full px-3 py-2 grid grid-cols-12 gap-2">
-      {/* Dock de gauche (Causes) */}
-      <div className="col-span-12 md:col-span-2 bg-white border rounded-lg shadow-sm p-2 h-[20vh] md:h-[calc(100vh-110px)] overflow-y-auto">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="font-bold text-slate-700 text-sm">📝 Causes</h3>
-          <button
-            className="px-2 py-1 text-xs rounded bg-indigo-600 text-white font-bold"
-            onClick={() => addPostItToFirebase("Nouvelle cause", "causes", "Modérateur", 24, 40, false)}
-          >
-            + Ajouter
-          </button>
-        </div>
-        <div className="space-y-2">
-          {postIts
-            .filter((p) => p.category === "causes" && !p.isInTree)
-            .map((p) => (
-              <div
-                key={p.id}
-                className="p-2 rounded border-2 shadow-sm text-white text-[12px] font-extrabold cursor-move"
-                style={{
-                  backgroundColor: COLORS.causes.bg,
-                  borderColor: COLORS.causes.border,
-                  fontFamily: "'Arial Black', Arial, sans-serif",
-                }}
-                onMouseDown={(e) => handleMouseDown(e, p.id)}
-                title="Glissez vers l’arbre"
+          <div className="text-[12px] text-gray-600 whitespace-nowrap">
+            Session: <span className="font-semibold">{sessionId}</span>
+          </div>
+
+          <div className="flex items-center gap-2 ml-2">
+            <input
+              className="px-2 py-[3px] border rounded text-[12px] font-bold"
+              placeholder="Nom du projet"
+              value={projectName}
+              onChange={(e) => {
+                setProjectName(e.target.value);
+                saveSessionMeta({ projectName: e.target.value });
+              }}
+            />
+            <input
+              className="px-2 py-[3px] border rounded text-[12px] font-bold"
+              placeholder="Thème"
+              value={theme}
+              onChange={(e) => {
+                setTheme(e.target.value);
+                saveSessionMeta({ theme: e.target.value });
+              }}
+            />
+          </div>
+
+          <div className="flex items-center gap-2 ml-auto">
+            <button
+              onClick={() => {
+                setIsConnecting((v) => !v);
+                setConnectSourceId(null);
+              }}
+              className={`px-3 py-[6px] rounded font-bold text-[12px] ${
+                isConnecting
+                  ? "bg-blue-600 text-white"
+                  : "bg-gray-200 text-gray-800 hover:bg-gray-300"
+              }`}
+            >
+              {isConnecting ? "Mode Connexion ON" : "Connecter Post-its"}
+            </button>
+
+            <button
+              onClick={startNewSession}
+              className="px-3 py-[6px] bg-gray-200 text-gray-800 rounded font-bold text-[12px] hover:bg-gray-300"
+            >
+              Nouvelle session
+            </button>
+
+            <button
+              onClick={() => {
+                const url = new URL(
+                  `${window.location.origin}${window.location.pathname}`
+                );
+                url.searchParams.set("session", sessionId);
+                url.searchParams.set("mode", "analysis");
+                window.open(url.toString(), "_blank");
+              }}
+              className="px-3 py-[6px] bg-emerald-600 text-white rounded font-bold text-[12px] hover:bg-emerald-700"
+              title="Ouvrir l'analyse dans un nouvel onglet"
+            >
+              Analyse
+            </button>
+
+            <div className="relative">
+              <button
+                onClick={() => setQrOpen((v) => !v)}
+                className="px-3 py-[6px] bg-gray-200 text-gray-800 rounded font-bold text-[12px] hover:bg-gray-300"
+                title="Afficher/Masquer le QR participants"
               >
-                {p.content}
-              </div>
-            ))}
+                QR
+              </button>
+              {qrOpen && (
+                <div className="absolute right-0 mt-2 w-64 bg-white border rounded shadow-lg p-2">
+                  <div className="text-[12px] font-semibold mb-1">
+                    QR participants
+                  </div>
+                  <QRCodeGenerator value={participantUrl} />
+                  <div className="text-[10px] break-all mt-1 text-gray-500">
+                    {participantUrl}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Arbre — occupe le max */}
-      <div className="col-span-12 md:col-span-8 bg-white border rounded-lg shadow-sm p-0 flex flex-col">
-        {/* barre outils arbre */}
-        <div className="flex items-center justify-between px-3 py-2 border-b bg-slate-50">
-          <div className="font-bold text-slate-700 text-sm">🌳 Arbre à Problèmes</div>
-          <div className="flex items-center gap-1">
-            <button
-              className="px-2 py-1 text-xs rounded bg-slate-200"
-              onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.1).toFixed(2)))}
-              title="Zoom -"
-            >
-              –
-            </button>
-            <button className="px-2 py-1 text-xs rounded bg-slate-200" onClick={() => setZoom(1)} title="Zoom 100%">
-              100%
-            </button>
-            <button
-              className="px-2 py-1 text-xs rounded bg-slate-200"
-              onClick={() => setZoom((z) => Math.min(2, +(z + 0.1).toFixed(2)))}
-              title="Zoom +"
-            >
-              +
-            </button>
-          </div>
-        </div>
-
-        {/* zone scrollable + canvas zoomé */}
+      {/* Corps : grille + panneau arbre maximum */}
+      <div className="max-w-7xl mx-auto p-2 grid grid-cols-12 grid-rows-12 gap-2 h-[calc(100vh-56px)]">
+        {/* Causes */}
         <div
-          ref={treeWrapRef}
-          className="relative flex-1 overflow-auto"
-          style={{
-            backgroundImage:
-              "linear-gradient(transparent 98%, #e2e8f0 99%), linear-gradient(90deg, transparent 98%, #e2e8f0 99%)",
-            backgroundSize: "24px 24px",
-          }}
+          className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 ${getPanelClasses(
+            "causes",
+            "col-span-3 row-span-10"
+          )}`}
         >
-          <div
-            ref={treeCanvasRef}
-            className="relative"
-            style={{
-              width: 1600,
-              height: 1200,
-              transform: `scale(${zoom})`,
-              transformOrigin: "top left",
-            }}
-          >
-            {/* SVG connexions */}
-            <svg
-              ref={svgRef}
-              className="absolute inset-0 w-[1600px] h-[1200px] pointer-events-none"
-              style={{ zIndex: 1 }}
-            >
-              <defs>
-                <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-                  <polygon points="0 0, 10 3.5, 0 7" fill="#334155" />
-                </marker>
-              </defs>
-              {renderConnections()}
-            </svg>
-
-            {/* Post-its dans l’arbre */}
-            {postIts.filter((p) => p.isInTree).map(renderPostIt)}
-          </div>
-        </div>
-      </div>
-
-      {/* Dock de droite (Conséquences + QR + Analyse inline) */}
-      <div className="col-span-12 md:col-span-2 flex flex-col gap-2">
-        <div className="bg-white border rounded-lg shadow-sm p-2 h-[14vh] md:h-[calc(60vh-12px)] overflow-y-auto">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="font-bold text-slate-700 text-sm">📈 Conséquences</h3>
-            <button
-              className="px-2 py-1 text-xs rounded bg-indigo-600 text-white font-bold"
-              onClick={() =>
-                addPostItToFirebase("Nouvelle conséquence", "consequences", "Modérateur", 1000, 40, false)
-              }
-            >
-              + Ajouter
-            </button>
-          </div>
-          <div className="space-y-2">
+          <PanelHeader
+            title="📝 Causes"
+            color={COLORS.causes.bg}
+            panel="causes"
+            onAdd={() =>
+              addPostItToFirebase("Nouvelle cause", "causes", "Modérateur")
+            }
+          />
+          <div className="flex-1 overflow-auto p-2 space-y-2">
             {postIts
-              .filter((p) => p.category === "consequences" && !p.isInTree)
+              .filter((p) => p.category === "causes" && !p.isInTree)
               .map((p) => (
                 <div
                   key={p.id}
-                  className="p-2 rounded border-2 shadow-sm text-white text-[12px] font-extrabold cursor-move"
+                  className="p-2 rounded-lg shadow-sm border-2 group relative cursor-default select-none"
                   style={{
-                    backgroundColor: COLORS.consequences.bg,
-                    borderColor: COLORS.consequences.border,
-                    fontFamily: "'Arial Black', Arial, sans-serif",
+                    backgroundColor: COLORS.causes.bg,
+                    color: COLORS.causes.text,
+                    borderColor: COLORS.causes.border,
+                    fontFamily: "'Arial Black', Arial, sans-serif"
                   }}
-                  onMouseDown={(e) => handleMouseDown(e, p.id)}
-                  title="Glissez vers l’arbre"
                 >
-                  {p.content}
+                  <div className="font-extrabold text-[13px] break-words">
+                    {p.content}
+                  </div>
+                  <div className="text-[11px] opacity-85">{p.author}</div>
                 </div>
               ))}
           </div>
         </div>
 
-        {/* Panneau QR compact */}
-        {showQR && (
-          <div className="bg-white border rounded-lg shadow-sm p-2">
-            <div className="font-bold text-slate-700 text-sm mb-2">QR participants</div>
-            <QRCodeGenerator url={participantUrl} />
+        {/* Arbre */}
+        <div
+          className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 ${getPanelClasses(
+            "tree",
+            "col-span-6 row-span-12"
+          )}`}
+        >
+          <PanelHeader title="🌳 Arbre à Problèmes" color="#374151" panel="tree" />
+          {/* Outils de zoom */}
+          <div className="px-2 py-1 border-b flex items-center gap-2 text-[12px]">
+            <button
+              className="px-2 py-[4px] bg-gray-200 rounded hover:bg-gray-300"
+              onClick={zoomOut}
+            >
+              −
+            </button>
+            <button
+              className="px-2 py-[4px] bg-gray-200 rounded hover:bg-gray-300"
+              onClick={zoomIn}
+            >
+              +
+            </button>
+            <button
+              className="px-2 py-[4px] bg-gray-200 rounded hover:bg-gray-300"
+              onClick={zoomReset}
+            >
+              100%
+            </button>
+            <button
+              className="px-2 py-[4px] bg-gray-200 rounded hover:bg-gray-300"
+              onClick={zoomFit}
+            >
+              Ajuster
+            </button>
+            <span className="text-gray-500 ml-2">{Math.round(zoom * 100)}%</span>
+            <span className="ml-auto text-gray-400">
+              Astuce: Ctrl/⌘ + molette pour zoomer
+            </span>
           </div>
-        )}
 
-        {/* Panneau Analyse inline */}
-        {showAnalysisInline && (
-          <div className="bg-white border rounded-lg shadow-sm p-2">
-            <AnalysisPanel sessionId={sessionId} postIts={postIts} connections={connections} />
-          </div>
-        )}
-      </div>
-
-      {/* Dock bas : Problèmes suggérés */}
-      <div className="col-span-12 bg-white border rounded-lg shadow-sm p-2">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="font-bold text-slate-700 text-sm">🎯 Problèmes suggérés</h3>
-          <button
-            className="px-2 py-1 text-xs rounded bg-indigo-600 text-white font-bold"
-            onClick={() => addPostItToFirebase("Nouveau problème", "problem", "Modérateur", 520, 40, false)}
+          <div
+            ref={treeScrollRef}
+            className="flex-1 overflow-auto relative"
+            onWheel={onWheel}
           >
-            + Ajouter
-          </button>
-        </div>
-        <div className="flex gap-2 overflow-x-auto">
-          {postIts
-            .filter((p) => p.category === "problem" && !p.isInTree)
-            .map((p) => (
+            {/* Zone scrollable (grande) */}
+            <div
+              ref={treeAreaRef}
+              className="relative"
+              style={{
+                width: 4000,
+                height: 2500
+              }}
+            >
+              {/* Canvas zoomé */}
               <div
-                key={p.id}
-                className="p-2 rounded border-2 shadow-sm text-white text-[12px] font-extrabold cursor-move min-w-[220px]"
+                ref={treeCanvasRef}
+                className="absolute top-0 left-0 origin-top-left"
                 style={{
-                  backgroundColor: COLORS.problem.bg,
-                  borderColor: COLORS.problem.border,
-                  fontFamily: "'Arial Black', Arial, sans-serif",
+                  width: 4000,
+                  height: 2500,
+                  transform: `scale(${zoom})`
                 }}
-                onMouseDown={(e) => handleMouseDown(e, p.id)}
-                title="Glissez vers l’arbre"
               >
-                {p.content}
+                {/* SVG connections */}
+                <svg
+                  className="absolute inset-0 w-[4000px] h-[2500px] pointer-events-none"
+                  style={{ zIndex: 1 }}
+                >
+                  <defs>
+                    <marker
+                      id="arrowhead"
+                      markerWidth="10"
+                      markerHeight="7"
+                      refX="9"
+                      refY="3.5"
+                      orient="auto"
+                    >
+                      <polygon points="0 0, 10 3.5, 0 7" fill="#374151" />
+                    </marker>
+                  </defs>
+                  {renderConnections()}
+                </svg>
+
+                {/* Post-its */}
+                {postIts.filter((p) => p.isInTree).map(renderPostIt)}
               </div>
-            ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Conséquences */}
+        <div
+          className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 ${getPanelClasses(
+            "consequences",
+            "col-span-3 row-span-10"
+          )}`}
+        >
+          <PanelHeader
+            title="📈 Conséquences"
+            color={COLORS.consequences.bg}
+            panel="consequences"
+            onAdd={() =>
+              addPostItToFirebase(
+                "Nouvelle conséquence",
+                "consequences",
+                "Modérateur"
+              )
+            }
+          />
+          <div className="flex-1 overflow-auto p-2 space-y-2">
+            {postIts
+              .filter((p) => p.category === "consequences" && !p.isInTree)
+              .map((p) => (
+                <div
+                  key={p.id}
+                  className="p-2 rounded-lg shadow-sm border-2 group relative cursor-default select-none"
+                  style={{
+                    backgroundColor: COLORS.consequences.bg,
+                    color: COLORS.consequences.text,
+                    borderColor: COLORS.consequences.border,
+                    fontFamily: "'Arial Black', Arial, sans-serif"
+                  }}
+                >
+                  <div className="font-extrabold text-[13px] break-words">
+                    {p.content}
+                  </div>
+                  <div className="text-[11px] opacity-85">{p.author}</div>
+                </div>
+              ))}
+          </div>
+        </div>
+
+        {/* Problèmes suggérés */}
+        <div
+          className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 ${getPanelClasses(
+            "problems",
+            "col-span-12 row-span-2"
+          )}`}
+        >
+          <PanelHeader
+            title="🎯 Problèmes Suggérés"
+            color={COLORS.problem.bg}
+            panel="problems"
+            onAdd={() =>
+              addPostItToFirebase("Nouveau problème", "problem", "Modérateur")
+            }
+          />
+          <div className="flex-1 overflow-x-auto p-2 flex gap-2">
+            {postIts
+              .filter((p) => p.category === "problem" && !p.isInTree)
+              .map((p) => (
+                <div
+                  key={p.id}
+                  className="p-2 rounded-lg shadow-sm border-2 group relative min-w-[240px] select-none"
+                  style={{
+                    backgroundColor: COLORS.problem.bg,
+                    color: COLORS.problem.text,
+                    borderColor: COLORS.problem.border,
+                    fontFamily: "'Arial Black', Arial, sans-serif"
+                  }}
+                >
+                  <div className="font-extrabold text-[13px] break-words">
+                    {p.content}
+                  </div>
+                  <div className="text-[11px] opacity-85">{p.author}</div>
+                </div>
+              ))}
+          </div>
         </div>
       </div>
     </div>
-  </div>
   );
 }
