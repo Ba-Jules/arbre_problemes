@@ -1,9 +1,10 @@
+// src/App.jsx
 import React, {
   useCallback,
   useEffect,
   useMemo,
   useRef,
-  useState
+  useState,
 } from "react";
 import {
   collection,
@@ -16,119 +17,160 @@ import {
   where,
   serverTimestamp,
   setDoc,
-  getDoc
+  getDoc,
 } from "firebase/firestore";
 import { db } from "./firebase-config";
 
+// Composants locaux
 import QRCodeGenerator from "./components/QRCodeGenerator.jsx";
-import ArbreProblemePresentation from "./components/ArbreProblemePresentation.jsx";
 import AnalysisPanel from "./components/AnalysisPanel.jsx";
 
-/* ======= UI & Constantes ======= */
-const COLORS = {
-  problem: { bg: "#ef4444", text: "#ffffff", border: "#dc2626" },
-  causes: { bg: "#fb7185", text: "#ffffff", border: "#f43f5e" },
-  consequences: { bg: "#22c55e", text: "#ffffff", border: "#16a34a" }
-};
+/* ========================= Constantes UI ========================= */
 
-const POSTIT_W = 240;
-const POSTIT_H = 96;
+const POSTIT_W = 220;
+const POSTIT_H = 90;
 const MAX_CHARS = 50;
 
+// Palette de couleurs (nom → {bg,text,border})
+const COLOR_PALETTE = {
+  red: { bg: "#ef4444", text: "#ffffff", border: "#dc2626" },
+  pink: { bg: "#fb7185", text: "#ffffff", border: "#f43f5e" },
+  green: { bg: "#22c55e", text: "#ffffff", border: "#16a34a" },
+  teal: { bg: "#14b8a6", text: "#ffffff", border: "#0d9488" },
+  blue: { bg: "#3b82f6", text: "#ffffff", border: "#2563eb" },
+  amber: { bg: "#f59e0b", text: "#111827", border: "#d97706" },
+};
+
+// catégories + couleurs par défaut conseillées
+const CATEGORY_DEFAULT_COLOR = {
+  problem: "red",
+  causes: "pink",
+  consequences: "green",
+};
+
+const CATEGORY_LABELS = {
+  problem: "Problème central",
+  causes: "Causes",
+  consequences: "Conséquences",
+};
+
 const defaultPanelStates = {
-  causes: "normal",
+  causes: "normal", // minimized | normal | maximized
   tree: "normal",
   consequences: "normal",
-  problems: "normal"
+  problems: "normal",
 };
 
-/* ======= Utils ======= */
-const debounce = (fn, ms = 300) => {
-  let t;
-  return (...args) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...args), ms);
-  };
-};
+/* ========================= App ========================= */
 
-const nowSessionId = () => {
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, "0");
-  return `PROBLEM-TREE-${d.getFullYear()}${p(d.getMonth() + 1)}${p(
-    d.getDate()
-  )}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-};
-
-/* ======= App ======= */
 export default function App() {
-  /* Mode via URL: moderator | participant | analysis */
-  const [mode, setMode] = useState("moderator");
+  /* -------- Mode & session -------- */
+  const [mode, setMode] = useState("moderator"); // "moderator" | "participant"
   const [sessionId, setSessionId] = useState("PROBLEM-TREE-2025");
 
-  /* Données */
+  /* -------- Données Firestore -------- */
   const [postIts, setPostIts] = useState([]);
   const [connections, setConnections] = useState([]);
 
-  /* UI / état */
+  /* -------- UI state -------- */
   const [panelStates, setPanelStates] = useState(defaultPanelStates);
+
+  // Zoom de l’arbre (0.5 → 2.0)
+  const [zoom, setZoom] = useState(1);
+  const treeScrollRef = useRef(null);
+
+  // Connexion (relier post-its)
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectSourceId, setConnectSourceId] = useState(null);
 
+  // Drag & drop
   const [selectedPostIt, setSelectedPostIt] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
-  /* Edition post-it */
+  // Édition du contenu
   const [editingId, setEditingId] = useState(null);
   const [editingText, setEditingText] = useState("");
 
-  /* Métadonnées session */
+  // Couleur active (pour les créations) + retouche
+  const [activeColor, setActiveColor] = useState("red");
+
+  // Métadonnées session
   const [projectName, setProjectName] = useState("");
   const [theme, setTheme] = useState("");
-  const [showOnboarding, setShowOnboarding] = useState(false);
 
-  /* Participant */
+  // Panneaux latéraux
+  const [showQR, setShowQR] = useState(false);
+  const [showAnalysis, setShowAnalysis] = useState(false);
+
+  /* -------- Participant -------- */
   const [participantName, setParticipantName] = useState(
     () => localStorage.getItem("participantName") || ""
-  );
-  const [hasIdentified, setHasIdentified] = useState(
-    () => !!localStorage.getItem("participantName")
   );
   const [selectedCategory, setSelectedCategory] = useState("problem");
   const [participantContent, setParticipantContent] = useState("");
 
-  /* Zoom & scroll de l’arbre */
-  const [zoom, setZoom] = useState(1); // 1 = 100%
-  const treeScrollRef = useRef(null);
-  const treeCanvasRef = useRef(null);
-
-  /* QR repliable */
-  const [qrOpen, setQrOpen] = useState(false);
-
-  /* Refs */
+  /* -------- Refs -------- */
   const treeAreaRef = useRef(null);
 
-  /* URL participant (stable, absolute) */
+  /* -------- URL participant -------- */
   const participantUrl = useMemo(() => {
-    const base = `${window.location.origin}${window.location.pathname}`;
-    const url = new URL(base);
+    const url = new URL(window.location.href);
     url.searchParams.set("session", sessionId);
     url.searchParams.set("mode", "participant");
     return url.toString();
   }, [sessionId]);
 
-  /* ======= URL params: appliquer mode + session ======= */
+  /* ========================= Helpers ========================= */
+
+  const generateSessionId = () => {
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, "0");
+    return `PROBLEM-TREE-${d.getFullYear()}${p(d.getMonth() + 1)}${p(
+      d.getDate()
+    )}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  };
+
+  const navigateToSession = (id) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("session", id);
+    window.history.replaceState({}, "", url.toString());
+    setSessionId(id);
+  };
+
+  const newSession = async () => {
+    const id = generateSessionId();
+    navigateToSession(id);
+    setPostIts([]);
+    setConnections([]);
+    setProjectName("");
+    setTheme("");
+    setShowAnalysis(false);
+    setShowQR(false);
+
+    try {
+      await setDoc(
+        doc(db, "sessions", id),
+        { sessionId: id, createdAt: serverTimestamp(), status: "active" },
+        { merge: true }
+      );
+    } catch {
+      /* no-op */
+    }
+  };
+
+  /* ========================= URL params ========================= */
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const m = params.get("mode");
     const s = params.get("session");
-    if (m && ["moderator", "participant", "analysis"].includes(m)) {
-      setMode(m);
-    }
+    if (m === "participant") setMode("participant");
     if (s) setSessionId(s);
   }, []);
 
-  /* ======= Charger métadonnées session (une fois par session) ======= */
+  /* ========================= Charger métadonnées session ========================= */
+
   useEffect(() => {
     if (!sessionId) return;
     const ref = doc(db, "sessions", sessionId);
@@ -136,19 +178,15 @@ export default function App() {
       .then((snap) => {
         if (snap.exists()) {
           const data = snap.data();
-          // On ne refait pas de set à chaque frappe : valeurs initiales seulement
           setProjectName(data.projectName || "");
           setTheme(data.theme || "");
-          setShowOnboarding(false);
-        } else {
-          // Première fois → slides
-          setShowOnboarding(true);
         }
       })
-      .catch(() => setShowOnboarding(true));
+      .catch(() => {});
   }, [sessionId]);
 
-  /* ======= Listeners Firestore ======= */
+  /* ========================= Firestore listeners ========================= */
+
   useEffect(() => {
     if (!sessionId) return;
 
@@ -159,6 +197,7 @@ export default function App() {
     const unsubP = onSnapshot(qP, (snap) => {
       const arr = [];
       snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
+      // tri simple (timestamp si dispo)
       arr.sort(
         (a, b) =>
           (a.timestamp?.toMillis?.() || 0) - (b.timestamp?.toMillis?.() || 0)
@@ -182,72 +221,47 @@ export default function App() {
     };
   }, [sessionId]);
 
-  /* ======= Nouvelle session (vide, sans post-it central auto) ======= */
-  const startNewSession = async () => {
-    const id = nowSessionId();
-    const url = new URL(window.location.href);
-    url.searchParams.set("session", id);
-    url.searchParams.delete("mode");
-    window.history.replaceState({}, "", url.toString());
-    setSessionId(id);
+  /* ========================= CRUD Post-its ========================= */
 
-    setPostIts([]);
-    setConnections([]);
-    setProjectName("");
-    setTheme("");
-    setShowOnboarding(true);
-
-    try {
-      await setDoc(
-        doc(db, "sessions", id),
-        { sessionId: id, createdAt: serverTimestamp(), status: "active" },
-        { merge: true }
-      );
-    } catch {}
-  };
-
-  /* ======= Enregistrement projet / thème (debounced) ======= */
-  const saveSessionMeta = useMemo(
-    () =>
-      debounce(async (fields) => {
-        try {
-          await setDoc(doc(db, "sessions", sessionId), fields, { merge: true });
-        } catch {}
-      }, 500),
-    [sessionId]
-  );
-
-  /* ======= CRUD Post-its ======= */
   const addPostItToFirebase = async (
     content,
     category,
     author,
     x = null,
     y = null,
-    isInTree = false
+    isInTree = false,
+    colorName = null
   ) => {
-    if (!content?.trim()) return;
-    const trimmed = content.trim().slice(0, MAX_CHARS);
+    const clean = (content || "").trim();
+    if (!clean) return;
 
     const defaults = {
-      causes: { x: 24, y: Math.random() * 160 + 48 },
-      consequences: { x: 1100, y: Math.random() * 160 + 48 },
-      problem: { x: 520, y: Math.random() * 160 + 48 }
+      causes: { x: 40, y: Math.random() * 120 + 50 },
+      consequences: { x: 860, y: Math.random() * 120 + 50 },
+      problem: { x: 420, y: Math.random() * 120 + 50 },
     };
-    const pos = x !== null ? { x, y } : defaults[category] || defaults.problem;
+    const pos =
+      x !== null && y !== null ? { x, y } : defaults[category] || defaults.problem;
+
+    const applyColor =
+      colorName ||
+      CATEGORY_DEFAULT_COLOR[category] ||
+      activeColor ||
+      "red";
 
     try {
       await addDoc(collection(db, "postits"), {
         sessionId,
-        content: trimmed,
+        content: clean.slice(0, MAX_CHARS),
         author,
-        category,
+        category, // "problem" | "causes" | "consequences"
         x: pos.x,
         y: pos.y,
         isInTree,
         isCentral: false,
+        color: applyColor, // nom dans COLOR_PALETTE
         childIds: [],
-        timestamp: serverTimestamp()
+        timestamp: serverTimestamp(),
       });
     } catch (e) {
       console.error(e);
@@ -266,7 +280,10 @@ export default function App() {
   const deletePostItFromFirebase = async (id) => {
     try {
       await deleteDoc(doc(db, "postits", id));
-      const rel = connections.filter((c) => c.fromId === id || c.toId === id);
+      // supprimer les liens associés
+      const rel = connections.filter(
+        (c) => c.fromId === id || c.toId === id
+      );
       await Promise.all(
         rel.map((c) => deleteDoc(doc(db, "connections", c.id)))
       );
@@ -275,7 +292,8 @@ export default function App() {
     }
   };
 
-  /* ======= Drag & drop ======= */
+  /* ========================= Drag & Drop ========================= */
+
   const handleMouseDown = (e, postItId) => {
     if (mode !== "moderator") return;
     e.preventDefault();
@@ -283,12 +301,13 @@ export default function App() {
     if (isConnecting) {
       if (!connectSourceId) {
         setConnectSourceId(postItId);
-      } else if (connectSourceId && connectSourceId !== postItId) {
+      } else if (connectSourceId !== postItId) {
+        // créer la connexion
         addDoc(collection(db, "connections"), {
           sessionId,
           fromId: connectSourceId,
           toId: postItId,
-          createdAt: serverTimestamp()
+          createdAt: serverTimestamp(),
         }).catch(console.error);
         setConnectSourceId(null);
       } else {
@@ -303,19 +322,25 @@ export default function App() {
     setDragOffset({ x: e.clientX - rect.left, y: e.clientY - rect.top });
   };
 
-  const onMove = useCallback(
+  const handleMouseMove = useCallback(
     (e) => {
       if (!isDragging || !selectedPostIt) return;
       const area = treeAreaRef.current;
       if (!area) return;
 
+      // coordonnées relatives à l’aire (en tenant compte du zoom)
       const rect = area.getBoundingClientRect();
-      // Compense le zoom
-      const dx = (e.clientX - rect.left - dragOffset.x) / zoom;
-      const dy = (e.clientY - rect.top - dragOffset.y) / zoom;
+      const relX = (e.clientX - rect.left) / zoom;
+      const relY = (e.clientY - rect.top) / zoom;
 
-      const newX = Math.max(0, Math.min(4000 - POSTIT_W, dx));
-      const newY = Math.max(0, Math.min(2500 - POSTIT_H, dy));
+      const newX = Math.max(
+        0,
+        Math.min(rect.width / zoom - POSTIT_W, relX - dragOffset.x)
+      );
+      const newY = Math.max(
+        0,
+        Math.min(rect.height / zoom - POSTIT_H, relY - dragOffset.y)
+      );
 
       setPostIts((prev) =>
         prev.map((p) =>
@@ -325,31 +350,32 @@ export default function App() {
       updatePostItInFirebase(selectedPostIt, {
         x: newX,
         y: newY,
-        isInTree: true
+        isInTree: true,
       });
     },
     [isDragging, selectedPostIt, dragOffset.x, dragOffset.y, zoom]
   );
 
-  const endDrag = useCallback(() => {
+  const handleMouseUp = () => {
     setIsDragging(false);
     setSelectedPostIt(null);
-  }, []);
+  };
 
   useEffect(() => {
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", endDrag);
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
     return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", endDrag);
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [onMove, endDrag]);
+  }, [handleMouseMove]);
 
-  /* ======= Edition ======= */
+  /* ========================= Édition ========================= */
+
   const startEditing = (p) => {
     if (mode !== "moderator") return;
     setEditingId(p.id);
-    setEditingText((p.content || "").slice(0, MAX_CHARS));
+    setEditingText(p.content || "");
   };
   const cancelEditing = () => {
     setEditingId(null);
@@ -358,34 +384,41 @@ export default function App() {
   const saveEditing = async () => {
     if (!editingId) return;
     await updatePostItInFirebase(editingId, {
-      content: editingText.trim().slice(0, MAX_CHARS)
+      content: (editingText || "").slice(0, MAX_CHARS),
     });
     cancelEditing();
   };
 
-  /* ======= Connexions (orthogonales) ======= */
+  /* ========================= Connexions (SVG) ========================= */
+
   const renderConnections = () => {
     const byId = Object.fromEntries(postIts.map((p) => [p.id, p]));
-    return connections.map((c) => {
+    const lines = [];
+
+    connections.forEach((c) => {
       const a = byId[c.fromId];
       const b = byId[c.toId];
-      if (!a || !b) return null;
+      if (!a || !b) return;
+      lines.push({ from: a, to: b });
+    });
 
-      const x1 = a.x + POSTIT_W / 2;
-      const y1 = a.y + POSTIT_H / 2;
-      const x2 = b.x + POSTIT_W / 2;
-      const y2 = b.y + POSTIT_H / 2;
+    return lines.map((ln, i) => {
+      const x1 = (ln.from.x || 0) + POSTIT_W / 2;
+      const y1 = (ln.from.y || 0) + POSTIT_H / 2;
+      const x2 = (ln.to.x || 0) + POSTIT_W / 2;
+      const y2 = (ln.to.y || 0) + POSTIT_H / 2;
 
+      // Lignes orthogonales harmonieuses
       const midY = y1 + (y2 - y1) / 2;
       const d = `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
 
       return (
         <path
-          key={`${c.fromId}-${c.toId}`}
+          key={i}
           d={d}
           fill="none"
-          stroke="#374151"
-          strokeWidth={3}
+          stroke="#0f172a"
+          strokeWidth="3"
           markerEnd="url(#arrowhead)"
           opacity="0.9"
           strokeLinecap="round"
@@ -395,30 +428,8 @@ export default function App() {
     });
   };
 
-  /* ======= Zoom handlers ======= */
-  const clampZoom = (z) => Math.max(0.25, Math.min(3, z));
-  const zoomIn = () => setZoom((z) => clampZoom(z + 0.25));
-  const zoomOut = () => setZoom((z) => clampZoom(z - 0.25));
-  const zoomReset = () => setZoom(1);
-  const zoomFit = () => {
-    // Fit horizontal dans le viewport actuel
-    const container = treeScrollRef.current;
-    if (!container) return;
-    const padding = 40;
-    const available = container.clientWidth - padding;
-    const needed = 1400; // largeur logique utile initiale du canvas
-    const z = clampZoom(available / needed);
-    setZoom(z);
-  };
+  /* ========================= Panneaux Windows-like ========================= */
 
-  const onWheel = (e) => {
-    if (!(e.ctrlKey || e.metaKey)) return;
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? -0.1 : 0.1;
-    setZoom((z) => clampZoom(z + delta));
-  };
-
-  /* ======= Panels helpers ======= */
   const setPanelState = (panel, state) => {
     setPanelStates((prev) => ({ ...prev, [panel]: state }));
   };
@@ -428,74 +439,78 @@ export default function App() {
       causes: panel === "causes" ? "maximized" : "minimized",
       tree: panel === "tree" ? "maximized" : "minimized",
       consequences: panel === "consequences" ? "maximized" : "minimized",
-      problems: panel === "problems" ? "maximized" : "minimized"
+      problems: panel === "problems" ? "maximized" : "minimized",
     });
   const restorePanels = () => setPanelStates(defaultPanelStates);
 
   const getPanelClasses = (panel, base) => {
     const st = panelStates[panel];
     if (st === "maximized") return "col-span-12 row-span-12 z-40";
-    if (st === "minimized") return "col-span-1 row-span-1 min-h-[36px]";
+    if (st === "minimized") return "col-span-2 row-span-2 min-h-[40px]";
     return base;
-  };
+    };
 
-  const PanelHeader = ({ title, color, panel, onAdd }) => {
+  const PanelHeader = ({ title, panel, onAdd }) => {
     const st = panelStates[panel];
     return (
-      <div className="flex items-center justify-between px-2 py-1 border-b bg-gradient-to-r from-blue-50 to-blue-100 border-gray-300">
-        <h3 className="font-extrabold text-[13px] leading-none" style={{ color }}>
+      <div className="flex items-center justify-between p-2 border-b bg-white/70 backdrop-blur-sm">
+        <div className="font-semibold text-sm text-slate-700">
           {st === "minimized" ? title.split(" ")[0] : title}
-        </h3>
+        </div>
         <div className="flex items-center gap-2">
           {st !== "minimized" && onAdd && (
             <button
               onClick={onAdd}
-              className="w-6 h-6 bg-indigo-500 text-white rounded text-xs font-bold hover:bg-indigo-600 flex items-center justify-center"
-              title="Ajouter post-it"
+              className="w-6 h-6 rounded bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700"
+              title="Ajouter un post-it"
             >
               +
             </button>
           )}
           <button
             onClick={() => minimizePanel(panel)}
-            className="w-6 h-6 bg-gray-200 hover:bg-gray-300 rounded-sm flex items-center justify-center text-gray-600 text-xs"
-            title="Minimiser"
+            className="w-6 h-6 rounded bg-slate-200 text-slate-600 text-xs"
+            title="Réduire"
           >
-            −
+            –
           </button>
           <button
             onClick={() =>
-              st === "maximized" ? restorePanels() : maximizePanel(panel)
+              panelStates[panel] === "maximized"
+                ? restorePanels()
+                : maximizePanel(panel)
             }
-            className="w-6 h-6 bg-gray-200 hover:bg-gray-300 rounded-sm flex items-center justify-center text-gray-600 text-xs"
-            title={st === "maximized" ? "Restaurer" : "Maximiser"}
+            className="w-6 h-6 rounded bg-slate-200 text-slate-600 text-xs"
+            title={
+              panelStates[panel] === "maximized" ? "Restaurer" : "Agrandir"
+            }
           >
-            {st === "maximized" ? "⧉" : "□"}
+            □
           </button>
         </div>
       </div>
     );
   };
 
-  /* ======= Rendu d’un post-it dans l’arbre ======= */
+  /* ========================= Rendu Post-it ========================= */
+
   const renderPostIt = (p) => {
-    const colors = COLORS[p.category] || COLORS.problem;
-    const isEditing = editingId === p.id;
-    const highlight =
-      isConnecting && (connectSourceId === p.id ? "ring-4 ring-blue-400" : "ring-2 ring-green-300");
+    const color = COLOR_PALETTE[p.color] || COLOR_PALETTE.red;
+    const isSource = isConnecting && connectSourceId === p.id;
 
     return (
       <div
         key={p.id}
-        className={`absolute select-none transition-all duration-150 ${
+        className={`absolute select-none transition-transform ${
           isConnecting ? "cursor-pointer" : "cursor-move"
-        } ${isConnecting ? highlight : ""}`}
+        } ${isSource ? "ring-4 ring-blue-400" : ""}`}
         style={{
           left: p.x,
           top: p.y,
           width: POSTIT_W,
           height: POSTIT_H,
-          zIndex: 2
+          transform: `translateZ(0)`,
+          zIndex: 3,
         }}
         onMouseDown={(e) => handleMouseDown(e, p.id)}
         title={
@@ -509,19 +524,19 @@ export default function App() {
         <div
           className="rounded-lg p-3 shadow-lg border-2 relative overflow-hidden"
           style={{
-            backgroundColor: colors.bg,
-            color: colors.text,
-            borderColor: colors.border,
+            backgroundColor: color.bg,
+            color: color.text,
+            borderColor: color.border,
             fontFamily: "'Arial Black', Arial, sans-serif",
-            lineHeight: 1.2
+            lineHeight: 1.15,
           }}
         >
-          {/* actions (crayon + supprimer) */}
+          {/* Actions (crayon / supprimer / couleur) */}
           {mode === "moderator" && !isConnecting && (
             <div className="absolute -top-1 -right-1 flex gap-1">
               <button
                 type="button"
-                className="w-5 h-5 bg-black/70 text-white rounded-full text-xs flex items-center justify-center"
+                className="w-5 h-5 bg-black/70 text-white rounded-full text-[11px] flex items-center justify-center"
                 title="Modifier"
                 onClick={(ev) => {
                   ev.stopPropagation();
@@ -532,7 +547,22 @@ export default function App() {
               </button>
               <button
                 type="button"
-                className="w-5 h-5 bg-black/70 text-white rounded-full text-xs flex items-center justify-center"
+                className="w-5 h-5 bg-black/70 text-white rounded-full text-[13px] flex items-center justify-center"
+                title="Couleur"
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  // fait cycler les couleurs
+                  const keys = Object.keys(COLOR_PALETTE);
+                  const idx = Math.max(0, keys.indexOf(p.color));
+                  const next = keys[(idx + 1) % keys.length];
+                  updatePostItInFirebase(p.id, { color: next });
+                }}
+              >
+                🎨
+              </button>
+              <button
+                type="button"
+                className="w-5 h-5 bg-black/70 text-white rounded-full text-[13px] flex items-center justify-center"
                 title="Supprimer"
                 onClick={(ev) => {
                   ev.stopPropagation();
@@ -544,160 +574,56 @@ export default function App() {
             </div>
           )}
 
-          {/* contenu */}
-          {!isEditing ? (
-            <>
-              <div className="font-extrabold text-[14px] break-words whitespace-normal max-h-[54px] overflow-hidden pr-6">
-                {p.content}
-              </div>
-              <div className="text-[11px] opacity-85 mt-1">{p.author}</div>
-            </>
-          ) : (
-            <div className="space-y-1">
-              <textarea
-                className="w-full h-16 text-[14px] font-extrabold text-black rounded p-1"
-                maxLength={MAX_CHARS}
-                value={editingText}
-                onChange={(e) => setEditingText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    saveEditing();
-                  } else if (e.key === "Escape") {
-                    e.preventDefault();
-                    cancelEditing();
-                  }
-                }}
-                autoFocus
-              />
-              <div className="text-[11px] text-white/90">
-                {editingText.length}/{MAX_CHARS}
-              </div>
-              <div className="flex gap-2">
-                <button
-                  className="px-2 py-1 bg-white text-black rounded text-xs font-bold"
-                  onClick={saveEditing}
-                >
-                  Enregistrer
-                </button>
-                <button
-                  className="px-2 py-1 bg-black/50 text-white rounded text-xs"
-                  onClick={cancelEditing}
-                >
-                  Annuler
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* + parent / enfant */}
-          {mode === "moderator" && !isConnecting && !isEditing && (
-            <>
-              <button
-                className="absolute -top-2 left-1/2 -translate-x-1/2 w-6 h-6 bg-white text-black rounded-full text-sm font-bold shadow-md hover:bg-gray-100 flex items-center justify-center"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const cat = p.category === "causes" ? "causes" : "consequences";
-                  addPostItToFirebase(
-                    "Nouveau",
-                    cat,
-                    "Modérateur",
-                    p.x,
-                    Math.max(0, p.y - POSTIT_H - 16),
-                    true
-                  );
-                }}
-                title="Ajouter un parent"
-              >
-                +
-              </button>
-              <button
-                className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-6 h-6 bg-white text-black rounded-full text-sm font-bold shadow-md hover:bg-gray-100 flex items-center justify-center"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const cat =
-                    p.category === "consequences" ? "consequences" : "causes";
-                  addPostItToFirebase(
-                    "Nouveau",
-                    cat,
-                    "Modérateur",
-                    p.x,
-                    p.y + POSTIT_H + 16,
-                    true
-                  );
-                }}
-                title="Ajouter un enfant"
-              >
-                +
-              </button>
-            </>
-          )}
+          {/* Contenu + compteur */}
+          <div className="font-extrabold text-[14px] break-words whitespace-normal max-h-[50px] overflow-hidden pr-6">
+            {p.content}
+          </div>
+          <div className="text-[11px] opacity-90 mt-1">{p.author}</div>
         </div>
       </div>
     );
   };
 
-  /* ======= VUES ======= */
+  /* ========================= Participant ========================= */
 
-  /* ANALYSE (si ouverte directement via l’URL) */
-  if (mode === "analysis") {
-    return (
-      <div className="min-h-screen bg-white p-2">
-        <AnalysisPanel sessionId={sessionId} />
-      </div>
-    );
-  }
-
-  /* PARTICIPANT */
   if (mode === "participant") {
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-50 p-4">
         <div className="max-w-md mx-auto">
-          <div className="text-center mb-6">
-            <h1 className="text-xl font-black text-gray-800 mb-1">
+          <div className="text-center mb-4">
+            <h1 className="text-xl font-black text-gray-900">
               🌳 Arbre à Problèmes
             </h1>
-            <p className="text-gray-600 text-sm">Session: {sessionId}</p>
+            <p className="text-gray-600 text-sm">Session&nbsp;: {sessionId}</p>
             {(projectName || theme) && (
-              <p className="text-gray-800 font-bold mt-2">
-                {projectName} {theme ? " — " + theme : ""}
+              <p className="text-gray-700 font-bold mt-1">
+                {projectName}
+                {theme ? " — " + theme : ""}
               </p>
             )}
           </div>
 
-          {!hasIdentified && (
-            <div className="bg-white rounded-xl p-5 shadow-lg mb-6">
-              <h2 className="text-lg font-bold mb-3">Votre nom</h2>
+          {!participantName && (
+            <div className="bg-white rounded-xl p-5 shadow">
+              <h2 className="text-base font-bold mb-2">Votre nom</h2>
               <input
                 type="text"
-                placeholder="Entrez votre nom…"
                 value={participantName}
                 onChange={(e) => setParticipantName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && participantName.trim()) {
-                    localStorage.setItem(
-                      "participantName",
-                      participantName.trim()
-                    );
-                    setHasIdentified(true);
-                  }
-                }}
                 className="w-full p-3 border-2 border-gray-300 rounded-lg text-base"
-                style={{ fontFamily: "'Arial Black', Arial, sans-serif" }}
+                placeholder="Entrez votre nom…"
               />
-              <div className="flex gap-2 mt-4">
+              <div className="flex gap-2 mt-3">
                 <button
                   type="button"
-                  onClick={() => {
-                    if (!participantName.trim()) return;
-                    localStorage.setItem(
-                      "participantName",
-                      participantName.trim()
-                    );
-                    setHasIdentified(true);
-                  }}
-                  className="flex-1 bg-indigo-600 text-white py-3 rounded-lg font-bold disabled:opacity-50"
                   disabled={!participantName.trim()}
+                  onClick={() => {
+                    const v = participantName.trim();
+                    if (!v) return;
+                    localStorage.setItem("participantName", v);
+                    setParticipantName(v);
+                  }}
+                  className="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-bold disabled:opacity-40"
                 >
                   Continuer
                 </button>
@@ -706,9 +632,8 @@ export default function App() {
                   onClick={() => {
                     localStorage.setItem("participantName", "Anonyme");
                     setParticipantName("Anonyme");
-                    setHasIdentified(true);
                   }}
-                  className="flex-1 bg-gray-200 text-gray-800 py-3 rounded-lg font-bold"
+                  className="px-4 bg-gray-200 text-gray-800 rounded-lg font-bold"
                 >
                   Anonyme
                 </button>
@@ -716,14 +641,14 @@ export default function App() {
             </div>
           )}
 
-          {hasIdentified && (
-            <div className="bg-white rounded-xl p-5 shadow-lg">
+          {participantName && (
+            <div className="bg-white rounded-xl p-5 shadow">
               <div className="mb-3">
-                <label className="block text-sm font-bold mb-2">
-                  Catégorie :
+                <label className="block text-sm font-bold mb-1">
+                  Catégorie
                 </label>
                 <div className="grid grid-cols-1 gap-2">
-                  {Object.keys(COLORS).map((cat) => (
+                  {Object.keys(CATEGORY_LABELS).map((cat) => (
                     <button
                       key={cat}
                       onClick={() => setSelectedCategory(cat)}
@@ -734,19 +659,21 @@ export default function App() {
                       }`}
                       style={{
                         backgroundColor:
-                          selectedCategory === cat ? COLORS[cat].bg : "#f9fafb",
+                          selectedCategory === cat
+                            ? COLOR_PALETTE[
+                                CATEGORY_DEFAULT_COLOR[cat] || "red"
+                              ].bg
+                            : "#f9fafb",
                         color:
                           selectedCategory === cat
-                            ? COLORS[cat].text
+                            ? COLOR_PALETTE[
+                                CATEGORY_DEFAULT_COLOR[cat] || "red"
+                              ].text
                             : "#374151",
-                        fontFamily: "'Arial Black', Arial, sans-serif"
+                        fontFamily: "'Arial Black', Arial, sans-serif",
                       }}
                     >
-                      {cat === "problem"
-                        ? "Problème central"
-                        : cat === "causes"
-                        ? "Causes"
-                        : "Conséquences"}
+                      {CATEGORY_LABELS[cat]}
                     </button>
                   ))}
                 </div>
@@ -758,11 +685,11 @@ export default function App() {
                 onChange={(e) =>
                   setParticipantContent(e.target.value.slice(0, MAX_CHARS))
                 }
-                className="w-full p-3 border-2 border-gray-300 rounded-lg font-extrabold text-black"
+                className="w-full p-3 border-2 border-gray-300 rounded-lg"
                 placeholder="Écrivez votre contribution…"
               />
-              <div className="text-xs text-gray-500 mt-1">
-                {participantContent.length}/{MAX_CHARS}
+              <div className="text-xs text-gray-500 mt-1 text-right">
+                {MAX_CHARS - (participantContent?.length || 0)} car. restants
               </div>
 
               <button
@@ -776,7 +703,8 @@ export default function App() {
                     participantName || "Anonyme",
                     null,
                     null,
-                    false
+                    false,
+                    CATEGORY_DEFAULT_COLOR[selectedCategory] || "red"
                   );
                   setParticipantContent("");
                 }}
@@ -784,11 +712,11 @@ export default function App() {
                 Envoyer
               </button>
 
-              <div className="mt-3 p-3 bg-gray-50 rounded-lg text-sm text-gray-600">
-                Connecté en tant que : <strong>{participantName}</strong>
+              <div className="mt-3 text-sm text-gray-600">
+                Connecté en tant que&nbsp;:{" "}
+                <strong>{participantName}</strong>
                 <button
                   onClick={() => {
-                    setHasIdentified(false);
                     setParticipantName("");
                     localStorage.removeItem("participantName");
                   }}
@@ -804,340 +732,506 @@ export default function App() {
     );
   }
 
-  /* SLIDES D’INTRO */
-  if (showOnboarding) {
-    return (
-      <ArbreProblemePresentation
-        sessionId={sessionId}
-        onComplete={async ({ projectName: p, theme: t }) => {
-          await setDoc(
-            doc(db, "sessions", sessionId),
-            {
-              sessionId,
-              projectName: p || "",
-              theme: t || "",
-              createdAt: serverTimestamp(),
-              status: "active"
-            },
-            { merge: true }
-          );
-          setProjectName(p || "");
-          setTheme(t || "");
-          setShowOnboarding(false);
-        }}
-        defaultProjectName={projectName}
-        defaultTheme={theme}
-      />
-    );
-  }
+  /* ========================= Modérateur ========================= */
 
-  /* MODÉRATEUR */
+  const zoomOut = () => setZoom((z) => Math.max(0.5, +(z - 0.1).toFixed(2)));
+  const zoomIn = () => setZoom((z) => Math.min(2, +(z + 0.1).toFixed(2)));
+  const zoomFit = () => {
+    // Ajuste horizontalement dans la zone visible
+    const wrap = treeScrollRef.current;
+    const area = treeAreaRef.current;
+    if (!wrap || !area) return;
+    const contentW = area.scrollWidth;
+    const contentH = area.scrollHeight;
+    const availW = wrap.clientWidth;
+    const availH = wrap.clientHeight;
+    const factor = Math.max(0.5, Math.min(2, +(Math.min(availW / contentW, availH / contentH)).toFixed(2)));
+    setZoom(factor || 1);
+  };
+
+  const visiblePostIts = {
+    inTree: postIts.filter((p) => p.isInTree),
+    causes: postIts.filter((p) => p.category === "causes" && !p.isInTree),
+    consequences: postIts.filter(
+      (p) => p.category === "consequences" && !p.isInTree
+    ),
+    problems: postIts.filter((p) => p.category === "problem" && !p.isInTree),
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      {/* Header compact sur 1 ligne */}
-      <div className="bg-white shadow-sm px-3 py-2 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto flex items-center gap-3">
-          <h1 className="text-[15px] font-black text-gray-900 whitespace-nowrap">
-            🌳 Arbre à Problèmes
-          </h1>
-
-          <div className="text-[12px] text-gray-600 whitespace-nowrap">
-            Session: <span className="font-semibold">{sessionId}</span>
+    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100">
+      {/* ======= Header compact (1 ligne) ======= */}
+      <div className="sticky top-0 z-40 bg-white/90 backdrop-blur border-b">
+        <div className="max-w-7xl mx-auto px-3 py-2 flex items-center gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">🌳</span>
+            <span className="font-bold text-slate-800">
+              Arbre à Problèmes
+            </span>
+            <span className="text-xs text-slate-500">
+              Session: {sessionId}
+            </span>
           </div>
 
-          <div className="flex items-center gap-2 ml-2">
+          {/* Projet / Thème (gros, visibles) */}
+          <div className="ml-3 flex items-center gap-2 flex-1">
             <input
-              className="px-2 py-[3px] border rounded text-[12px] font-bold"
+              className="px-3 py-1 border rounded text-sm font-bold"
               placeholder="Nom du projet"
               value={projectName}
-              onChange={(e) => {
-                setProjectName(e.target.value);
-                saveSessionMeta({ projectName: e.target.value });
+              onChange={(e) => setProjectName(e.target.value)}
+              onBlur={async () => {
+                await setDoc(
+                  doc(db, "sessions", sessionId),
+                  { projectName },
+                  { merge: true }
+                );
               }}
             />
             <input
-              className="px-2 py-[3px] border rounded text-[12px] font-bold"
+              className="px-3 py-1 border rounded text-sm font-bold"
               placeholder="Thème"
               value={theme}
-              onChange={(e) => {
-                setTheme(e.target.value);
-                saveSessionMeta({ theme: e.target.value });
+              onChange={(e) => setTheme(e.target.value)}
+              onBlur={async () => {
+                await setDoc(
+                  doc(db, "sessions", sessionId),
+                  { theme },
+                  { merge: true }
+                );
               }}
             />
           </div>
 
-          <div className="flex items-center gap-2 ml-auto">
+          {/* Palette de couleurs */}
+          <div className="hidden md:flex items-center gap-1">
+            {Object.keys(COLOR_PALETTE).map((k) => (
+              <button
+                key={k}
+                className={`w-4 h-4 rounded ${
+                  activeColor === k ? "ring-2 ring-slate-700" : ""
+                }`}
+                style={{ backgroundColor: COLOR_PALETTE[k].bg }}
+                title={`Couleur par défaut: ${k}`}
+                onClick={() => setActiveColor(k)}
+              />
+            ))}
+          </div>
+
+          {/* Boutons actions */}
+          <div className="flex items-center gap-2">
             <button
+              className={`px-3 py-1 rounded text-sm font-semibold ${
+                isConnecting
+                  ? "bg-blue-600 text-white"
+                  : "bg-slate-200 text-slate-700"
+              }`}
               onClick={() => {
                 setIsConnecting((v) => !v);
                 setConnectSourceId(null);
               }}
-              className={`px-3 py-[6px] rounded font-bold text-[12px] ${
-                isConnecting
-                  ? "bg-blue-600 text-white"
-                  : "bg-gray-200 text-gray-800 hover:bg-gray-300"
-              }`}
+              title="Relier des post-its"
             >
-              {isConnecting ? "Mode Connexion ON" : "Connecter Post-its"}
+              Connecter
             </button>
 
             <button
-              onClick={startNewSession}
-              className="px-3 py-[6px] bg-gray-200 text-gray-800 rounded font-bold text-[12px] hover:bg-gray-300"
+              className="px-3 py-1 rounded text-sm font-semibold bg-slate-200 text-slate-700"
+              onClick={newSession}
+              title="Nouvelle session"
             >
               Nouvelle session
             </button>
 
             <button
-              onClick={() => {
-                const url = new URL(
-                  `${window.location.origin}${window.location.pathname}`
-                );
-                url.searchParams.set("session", sessionId);
-                url.searchParams.set("mode", "analysis");
-                window.open(url.toString(), "_blank");
-              }}
-              className="px-3 py-[6px] bg-emerald-600 text-white rounded font-bold text-[12px] hover:bg-emerald-700"
-              title="Ouvrir l'analyse dans un nouvel onglet"
+              className="px-3 py-1 rounded text-sm font-semibold bg-emerald-600 text-white"
+              onClick={() => setShowAnalysis((v) => !v)}
+              title="Analyse"
             >
               Analyse
             </button>
 
-            <div className="relative">
-              <button
-                onClick={() => setQrOpen((v) => !v)}
-                className="px-3 py-[6px] bg-gray-200 text-gray-800 rounded font-bold text-[12px] hover:bg-gray-300"
-                title="Afficher/Masquer le QR participants"
-              >
-                QR
-              </button>
-              {qrOpen && (
-                <div className="absolute right-0 mt-2 w-64 bg-white border rounded shadow-lg p-2">
-                  <div className="text-[12px] font-semibold mb-1">
-                    QR participants
-                  </div>
-                  <QRCodeGenerator value={participantUrl} />
-                  <div className="text-[10px] break-all mt-1 text-gray-500">
-                    {participantUrl}
-                  </div>
-                </div>
-              )}
-            </div>
+            <button
+              className="px-3 py-1 rounded text-sm font-semibold bg-slate-200 text-slate-700"
+              onClick={() => setShowQR((v) => !v)}
+              title="QR participants"
+            >
+              QR
+            </button>
           </div>
         </div>
       </div>
 
-      {/* Corps : grille + panneau arbre maximum */}
-      <div className="max-w-7xl mx-auto p-2 grid grid-cols-12 grid-rows-12 gap-2 h-[calc(100vh-56px)]">
+      {/* ======= Corps ======= */}
+      <div className="max-w-7xl mx-auto p-3 grid grid-cols-12 grid-rows-12 gap-2 h-[calc(100vh-56px)]">
         {/* Causes */}
         <div
-          className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 ${getPanelClasses(
+          className={`bg-white rounded shadow border ${getPanelClasses(
             "causes",
-            "col-span-3 row-span-10"
+            "col-span-3 row-span-9"
           )}`}
         >
           <PanelHeader
-            title="📝 Causes"
-            color={COLORS.causes.bg}
+            title="Causes"
             panel="causes"
             onAdd={() =>
-              addPostItToFirebase("Nouvelle cause", "causes", "Modérateur")
+              addPostItToFirebase(
+                "Nouvelle cause",
+                "causes",
+                "Modérateur",
+                null,
+                null,
+                false,
+                CATEGORY_DEFAULT_COLOR.causes
+              )
             }
           />
-          <div className="flex-1 overflow-auto p-2 space-y-2">
-            {postIts
-              .filter((p) => p.category === "causes" && !p.isInTree)
-              .map((p) => (
-                <div
-                  key={p.id}
-                  className="p-2 rounded-lg shadow-sm border-2 group relative cursor-default select-none"
-                  style={{
-                    backgroundColor: COLORS.causes.bg,
-                    color: COLORS.causes.text,
-                    borderColor: COLORS.causes.border,
-                    fontFamily: "'Arial Black', Arial, sans-serif"
-                  }}
-                >
-                  <div className="font-extrabold text-[13px] break-words">
-                    {p.content}
+          <div className="p-2 h-full overflow-y-auto">
+            <div className="space-y-2">
+              {visiblePostIts.causes.map((p) => {
+                const color = COLOR_PALETTE[p.color] || COLOR_PALETTE.pink;
+                return (
+                  <div
+                    key={p.id}
+                    className="p-3 rounded border-2 shadow-sm group relative select-none"
+                    style={{
+                      backgroundColor: color.bg,
+                      color: color.text,
+                      borderColor: color.border,
+                      fontFamily: "'Arial Black', Arial, sans-serif",
+                    }}
+                    onMouseDown={(e) => handleMouseDown(e, p.id)}
+                  >
+                    <div className="font-extrabold text-sm break-words">
+                      {p.content}
+                    </div>
+                    <div className="text-[11px] opacity-90">{p.author}</div>
+                    {!isConnecting && (
+                      <button
+                        className="absolute -top-1 -right-1 w-5 h-5 bg-black/70 text-white rounded-full text-[12px] opacity-0 group-hover:opacity-100"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          deletePostItFromFirebase(p.id);
+                        }}
+                        title="Supprimer"
+                      >
+                        ×
+                      </button>
+                    )}
                   </div>
-                  <div className="text-[11px] opacity-85">{p.author}</div>
-                </div>
-              ))}
+                );
+              })}
+            </div>
           </div>
         </div>
 
         {/* Arbre */}
         <div
-          className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 ${getPanelClasses(
+          className={`bg-white rounded shadow border ${getPanelClasses(
             "tree",
-            "col-span-6 row-span-12"
+            "col-span-6 row-span-9"
           )}`}
         >
-          <PanelHeader title="🌳 Arbre à Problèmes" color="#374151" panel="tree" />
-          {/* Outils de zoom */}
-          <div className="px-2 py-1 border-b flex items-center gap-2 text-[12px]">
+          <PanelHeader title="Arbre à Problèmes" panel="tree" />
+          {/* Contrôles de zoom (barre fine) */}
+          <div className="px-2 py-1 border-b flex items-center gap-2 text-sm">
             <button
-              className="px-2 py-[4px] bg-gray-200 rounded hover:bg-gray-300"
+              className="px-2 py-0.5 rounded bg-slate-200 text-slate-700"
               onClick={zoomOut}
+              title="Dézoomer"
             >
-              −
+              –
             </button>
+            <span className="min-w-[44px] text-center font-semibold">
+              {Math.round(zoom * 100)}%
+            </span>
             <button
-              className="px-2 py-[4px] bg-gray-200 rounded hover:bg-gray-300"
+              className="px-2 py-0.5 rounded bg-slate-200 text-slate-700"
               onClick={zoomIn}
+              title="Zoomer"
             >
               +
             </button>
             <button
-              className="px-2 py-[4px] bg-gray-200 rounded hover:bg-gray-300"
-              onClick={zoomReset}
-            >
-              100%
-            </button>
-            <button
-              className="px-2 py-[4px] bg-gray-200 rounded hover:bg-gray-300"
+              className="px-2 py-0.5 rounded bg-slate-200 text-slate-700"
               onClick={zoomFit}
+              title="Ajuster"
             >
               Ajuster
             </button>
-            <span className="text-gray-500 ml-2">{Math.round(zoom * 100)}%</span>
-            <span className="ml-auto text-gray-400">
-              Astuce: Ctrl/⌘ + molette pour zoomer
+            <span className="ml-auto text-xs text-slate-500">
+              Astuce&nbsp;: Ctrl/⌘ + molette
             </span>
           </div>
 
+          {/* Zone scrollable + zoomée */}
           <div
             ref={treeScrollRef}
-            className="flex-1 overflow-auto relative"
-            onWheel={onWheel}
+            className="relative w-full h-[calc(100%-56px)] overflow-auto"
+            onWheel={(e) => {
+              if (e.ctrlKey || e.metaKey) {
+                e.preventDefault();
+                const delta = e.deltaY > 0 ? -0.05 : 0.05;
+                setZoom((z) =>
+                  Math.max(0.5, Math.min(2, +(z + delta).toFixed(2)))
+                );
+              }
+            }}
           >
-            {/* Zone scrollable (grande) */}
             <div
               ref={treeAreaRef}
               className="relative"
               style={{
-                width: 4000,
-                height: 2500
+                width: 2000,
+                height: 1200,
+                transform: `scale(${zoom})`,
+                transformOrigin: "0 0",
               }}
             >
-              {/* Canvas zoomé */}
-              <div
-                ref={treeCanvasRef}
-                className="absolute top-0 left-0 origin-top-left"
-                style={{
-                  width: 4000,
-                  height: 2500,
-                  transform: `scale(${zoom})`
-                }}
+              {/* SVG des connexions */}
+              <svg
+                className="absolute inset-0 w-[2000px] h-[1200px] pointer-events-none"
+                style={{ zIndex: 2 }}
               >
-                {/* SVG connections */}
-                <svg
-                  className="absolute inset-0 w-[4000px] h-[2500px] pointer-events-none"
-                  style={{ zIndex: 1 }}
-                >
-                  <defs>
-                    <marker
-                      id="arrowhead"
-                      markerWidth="10"
-                      markerHeight="7"
-                      refX="9"
-                      refY="3.5"
-                      orient="auto"
-                    >
-                      <polygon points="0 0, 10 3.5, 0 7" fill="#374151" />
-                    </marker>
-                  </defs>
-                  {renderConnections()}
-                </svg>
+                <defs>
+                  <marker
+                    id="arrowhead"
+                    markerWidth="10"
+                    markerHeight="7"
+                    refX="9"
+                    refY="3.5"
+                    orient="auto"
+                  >
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#0f172a" />
+                  </marker>
+                </defs>
+                {renderConnections()}
+              </svg>
 
-                {/* Post-its */}
-                {postIts.filter((p) => p.isInTree).map(renderPostIt)}
-              </div>
+              {/* Post-its dans l’arbre */}
+              {visiblePostIts.inTree.map(renderPostIt)}
             </div>
           </div>
         </div>
 
         {/* Conséquences */}
         <div
-          className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 ${getPanelClasses(
+          className={`bg-white rounded shadow border ${getPanelClasses(
             "consequences",
-            "col-span-3 row-span-10"
+            "col-span-3 row-span-9"
           )}`}
         >
           <PanelHeader
-            title="📈 Conséquences"
-            color={COLORS.consequences.bg}
+            title="Conséquences"
             panel="consequences"
             onAdd={() =>
               addPostItToFirebase(
                 "Nouvelle conséquence",
                 "consequences",
-                "Modérateur"
+                "Modérateur",
+                null,
+                null,
+                false,
+                CATEGORY_DEFAULT_COLOR.consequences
               )
             }
           />
-          <div className="flex-1 overflow-auto p-2 space-y-2">
-            {postIts
-              .filter((p) => p.category === "consequences" && !p.isInTree)
-              .map((p) => (
-                <div
-                  key={p.id}
-                  className="p-2 rounded-lg shadow-sm border-2 group relative cursor-default select-none"
-                  style={{
-                    backgroundColor: COLORS.consequences.bg,
-                    color: COLORS.consequences.text,
-                    borderColor: COLORS.consequences.border,
-                    fontFamily: "'Arial Black', Arial, sans-serif"
-                  }}
-                >
-                  <div className="font-extrabold text-[13px] break-words">
-                    {p.content}
+          <div className="p-2 h-full overflow-y-auto">
+            <div className="space-y-2">
+              {visiblePostIts.consequences.map((p) => {
+                const color = COLOR_PALETTE[p.color] || COLOR_PALETTE.green;
+                return (
+                  <div
+                    key={p.id}
+                    className="p-3 rounded border-2 shadow-sm group relative select-none"
+                    style={{
+                      backgroundColor: color.bg,
+                      color: color.text,
+                      borderColor: color.border,
+                      fontFamily: "'Arial Black', Arial, sans-serif",
+                    }}
+                    onMouseDown={(e) => handleMouseDown(e, p.id)}
+                  >
+                    <div className="font-extrabold text-sm break-words">
+                      {p.content}
+                    </div>
+                    <div className="text-[11px] opacity-90">{p.author}</div>
+                    {!isConnecting && (
+                      <button
+                        className="absolute -top-1 -right-1 w-5 h-5 bg-black/70 text-white rounded-full text-[12px] opacity-0 group-hover:opacity-100"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          deletePostItFromFirebase(p.id);
+                        }}
+                        title="Supprimer"
+                      >
+                        ×
+                      </button>
+                    )}
                   </div>
-                  <div className="text-[11px] opacity-85">{p.author}</div>
-                </div>
-              ))}
+                );
+              })}
+            </div>
           </div>
         </div>
 
         {/* Problèmes suggérés */}
         <div
-          className={`bg-white rounded-lg shadow-lg flex flex-col border border-gray-300 ${getPanelClasses(
+          className={`bg-white rounded shadow border ${getPanelClasses(
             "problems",
-            "col-span-12 row-span-2"
+            "col-span-12 row-span-3"
           )}`}
         >
           <PanelHeader
-            title="🎯 Problèmes Suggérés"
-            color={COLORS.problem.bg}
+            title="Problèmes Suggérés"
             panel="problems"
             onAdd={() =>
-              addPostItToFirebase("Nouveau problème", "problem", "Modérateur")
+              addPostItToFirebase(
+                "Nouveau problème",
+                "problem",
+                "Modérateur",
+                null,
+                null,
+                false,
+                CATEGORY_DEFAULT_COLOR.problem
+              )
             }
           />
-          <div className="flex-1 overflow-x-auto p-2 flex gap-2">
-            {postIts
-              .filter((p) => p.category === "problem" && !p.isInTree)
-              .map((p) => (
-                <div
-                  key={p.id}
-                  className="p-2 rounded-lg shadow-sm border-2 group relative min-w-[240px] select-none"
-                  style={{
-                    backgroundColor: COLORS.problem.bg,
-                    color: COLORS.problem.text,
-                    borderColor: COLORS.problem.border,
-                    fontFamily: "'Arial Black', Arial, sans-serif"
-                  }}
-                >
-                  <div className="font-extrabold text-[13px] break-words">
-                    {p.content}
+          <div className="p-2 h-full overflow-x-auto">
+            <div className="flex gap-2">
+              {visiblePostIts.problems.map((p) => {
+                const color = COLOR_PALETTE[p.color] || COLOR_PALETTE.red;
+                return (
+                  <div
+                    key={p.id}
+                    className="p-3 rounded border-2 shadow-sm group relative select-none min-w-[220px]"
+                    style={{
+                      backgroundColor: color.bg,
+                      color: color.text,
+                      borderColor: color.border,
+                      fontFamily: "'Arial Black', Arial, sans-serif",
+                    }}
+                    onMouseDown={(e) => handleMouseDown(e, p.id)}
+                  >
+                    <div className="font-extrabold text-sm break-words">
+                      {p.content}
+                    </div>
+                    <div className="text-[11px] opacity-90">{p.author}</div>
+                    {!isConnecting && (
+                      <button
+                        className="absolute -top-1 -right-1 w-5 h-5 bg-black/70 text-white rounded-full text-[12px] opacity-0 group-hover:opacity-100"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          deletePostItFromFirebase(p.id);
+                        }}
+                        title="Supprimer"
+                      >
+                        ×
+                      </button>
+                    )}
                   </div>
-                  <div className="text-[11px] opacity-85">{p.author}</div>
-                </div>
-              ))}
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>
+
+      {/* ======= Drawer QR ======= */}
+      {showQR && (
+        <div className="fixed top-[56px] right-3 z-50 w-[320px] bg-white rounded shadow-lg border">
+          <div className="p-3 border-b flex items-center justify-between">
+            <div className="font-semibold">QR participants</div>
+            <button
+              className="w-6 h-6 rounded bg-slate-200"
+              onClick={() => setShowQR(false)}
+              title="Fermer"
+            >
+              ×
+            </button>
+          </div>
+          <div className="p-3">
+            <div className="w-full flex justify-center">
+              <QRCodeGenerator text={participantUrl} size={180} />
+            </div>
+            <div className="text-center text-xs mt-2">Participants</div>
+            <div className="mt-3 text-[11px] break-all text-slate-600">
+              {participantUrl}
+            </div>
+            <button
+              className="mt-2 w-full px-3 py-2 rounded bg-slate-200 text-slate-800 text-sm font-semibold"
+              onClick={() => {
+                navigator.clipboard.writeText(participantUrl);
+              }}
+            >
+              Copier le lien
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ======= Drawer Analyse ======= */}
+      {showAnalysis && (
+        <div className="fixed top-[56px] right-3 z-50 w-[380px] max-h-[calc(100vh-64px)] overflow-auto bg-white rounded shadow-lg border">
+          <div className="p-3 border-b flex items-center justify-between">
+            <div className="font-semibold">Analyse</div>
+            <button
+              className="w-6 h-6 rounded bg-slate-200"
+              onClick={() => setShowAnalysis(false)}
+              title="Fermer"
+            >
+              ×
+            </button>
+          </div>
+          <div className="p-3">
+            <AnalysisPanel sessionId={sessionId} />
+          </div>
+        </div>
+      )}
+
+      {/* ======= Modale Édition ======= */}
+      {editingId && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
+          <div className="bg-white rounded-xl shadow-xl w-[420px] p-4">
+            <div className="font-bold mb-2">Modifier le post-it</div>
+            <textarea
+              rows={4}
+              value={editingText}
+              onChange={(e) =>
+                setEditingText(e.target.value.slice(0, MAX_CHARS))
+              }
+              className="w-full p-3 border-2 border-gray-300 rounded-lg font-extrabold"
+              placeholder="Contenu…"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                  e.preventDefault();
+                  saveEditing();
+                }
+              }}
+            />
+            <div className="flex items-center justify-between mt-1 text-xs text-gray-500">
+              <span>{MAX_CHARS - (editingText?.length || 0)} car. restants</span>
+              <span>Ctrl/⌘ + Entrée pour enregistrer</span>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 mt-3">
+              <button
+                className="px-3 py-1 rounded bg-slate-200 text-slate-800"
+                onClick={cancelEditing}
+              >
+                Annuler
+              </button>
+              <button
+                className="px-3 py-1 rounded bg-indigo-600 text-white font-semibold"
+                onClick={saveEditing}
+              >
+                Enregistrer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
