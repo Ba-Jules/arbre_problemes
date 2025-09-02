@@ -33,13 +33,14 @@ const POSTIT_W = 220;
 const POSTIT_H = 90;
 const MAX_CHARS = 50;
 
+/* Couleurs (fond & bord). Le texte est forcé en noir pour la lisibilité. */
 const COLOR_PALETTE = {
-  red: { bg: "#ef4444", text: "#ffffff", border: "#dc2626" },
-  pink: { bg: "#fb7185", text: "#ffffff", border: "#f43f5e" },
-  green: { bg: "#22c55e", text: "#ffffff", border: "#16a34a" },
-  teal: { bg: "#14b8a6", text: "#ffffff", border: "#0d9488" },
-  blue: { bg: "#3b82f6", text: "#ffffff", border: "#2563eb" },
-  amber: { bg: "#f59e0b", text: "#111827", border: "#d97706" },
+  red:   { bg: "#ef4444", border: "#991b1b" },
+  pink:  { bg: "#fb7185", border: "#be123c" },
+  green: { bg: "#22c55e", border: "#166534" },
+  teal:  { bg: "#14b8a6", border: "#0f766e" },
+  blue:  { bg: "#3b82f6", border: "#1e3a8a" },
+  amber: { bg: "#f59e0b", border: "#92400e" },
 };
 
 const CATEGORY_DEFAULT_COLOR = {
@@ -138,6 +139,17 @@ export default function App() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, [syncViewFromUrl]);
+
+  /* Quand on revient de l’onglet Analyse → on réinitialise les modes */
+  useEffect(() => {
+    const onFocus = () => {
+      setIsConnecting(false);
+      setConnectSourceId(null);
+      setPaintMode(false);
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
 
   const generateSessionId = () => {
     const d = new Date();
@@ -479,7 +491,6 @@ export default function App() {
       const midY = y1 + (y2 - y1) / 2;
       const d = `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
 
-      // point pour le bouton "supprimer le lien"
       const cx = (x1 + x2) / 2;
       const cy = midY;
 
@@ -541,9 +552,19 @@ export default function App() {
     return base;
   };
 
-  const PanelHeader = ({ title }) => (
+  const PanelHeader = ({ title, onAdd }) => (
     <div className="flex items-center justify-between p-2 border-b bg-white/70 backdrop-blur-sm">
       <div className="font-semibold text-sm text-slate-700">{title}</div>
+      {onAdd && (
+        <button
+          onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
+          onClick={onAdd}
+          className="w-6 h-6 rounded bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700"
+          title="Ajouter un post-it"
+        >
+          +
+        </button>
+      )}
     </div>
   );
 
@@ -578,12 +599,12 @@ export default function App() {
             : "Glissez pour déplacer"
         }
       >
-        {/* + discrets haut/bas */}
+        {/* + discrets haut/bas —— petits ronds noirs posés SUR le post-it */}
         {mode === "moderator" && !isConnecting && (
           <>
             <button
               type="button"
-              className="absolute left-1/2 -translate-x-1/2 -top-3 w-6 h-6 rounded-full bg-emerald-600 text-white text-[14px] leading-[22px] shadow"
+              className="absolute left-1/2 -translate-x-1/2 top-1 w-5 h-5 rounded-full bg-black text-white text-[12px] leading-[18px] shadow"
               title="Ajouter & relier (au-dessus)"
               onMouseDown={(ev)=>{ev.preventDefault();ev.stopPropagation();}}
               onClick={(ev) => {
@@ -595,7 +616,7 @@ export default function App() {
             </button>
             <button
               type="button"
-              className="absolute left-1/2 -translate-x-1/2 -bottom-3 w-6 h-6 rounded-full bg-emerald-600 text-white text-[14px] leading-[22px] shadow"
+              className="absolute left-1/2 -translate-x-1/2 bottom-1 w-5 h-5 rounded-full bg-black text-white text-[12px] leading-[18px] shadow"
               title="Ajouter & relier (au-dessous)"
               onMouseDown={(ev)=>{ev.preventDefault();ev.stopPropagation();}}
               onClick={(ev) => {
@@ -612,17 +633,17 @@ export default function App() {
           className="rounded-lg p-3 shadow-lg border-2 relative"
           style={{
             backgroundColor: color.bg,
-            color: color.text,
             borderColor: color.border,
             fontFamily: "'Arial Black', Arial, sans-serif",
-            lineHeight: 1.15,
+            lineHeight: 1.2,
+            color: "#111827", // texte noir
           }}
         >
           {mode === "moderator" && !isConnecting && !paintMode && (
             <div className="absolute -top-1 -right-1 flex gap-1">
               <button
                 type="button"
-                className="w-5 h-5 bg-black/70 text-white rounded-full text-[11px] flex items-center justify-center"
+                className="w-5 h-5 bg-black/80 text-white rounded-full text-[11px] flex items-center justify-center"
                 title="Modifier"
                 onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
                 onClick={(ev) => {
@@ -634,7 +655,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                className="w-5 h-5 bg-black/70 text-white rounded-full text-[13px] flex items-center justify-center"
+                className="w-5 h-5 bg-black/80 text-white rounded-full text-[13px] flex items-center justify-center"
                 title="Couleur"
                 onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
                 onClick={(ev) => {
@@ -649,7 +670,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                className="w-5 h-5 bg-black/70 text-white rounded-full text-[13px] flex items-center justify-center"
+                className="w-5 h-5 bg-black/80 text-white rounded-full text-[13px] flex items-center justify-center"
                 title="Supprimer"
                 onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
                 onClick={(ev) => {
@@ -662,7 +683,7 @@ export default function App() {
             </div>
           )}
 
-          <div className="font-extrabold text-[14px] break-words whitespace-normal max-h-[50px] overflow-hidden pr-6">
+          <div className="font-extrabold text-[15px] break-words whitespace-normal max-h-[54px] overflow-hidden pr-6">
             {p.content}
           </div>
           <div className="text-[11px] opacity-90 mt-1">{p.author}</div>
@@ -908,20 +929,20 @@ export default function App() {
             className="p-3 rounded border-2 shadow-sm group relative select-none"
             style={{
               backgroundColor: color.bg,
-              color: color.text,
+              color: "#111827",
               borderColor: color.border,
               fontFamily: "'Arial Black', Arial, sans-serif",
             }}
             onMouseDown={(e) => handleMouseDown(e, p.id)}
             title={paintMode ? "Cliquez pour appliquer la couleur" : `Glissez vers l'arbre (${title})`}
           >
-            <div className="font-extrabold text-sm break-words">
+            <div className="font-extrabold text-sm">
               {p.content}
             </div>
             <div className="text-[11px] opacity-90">{p.author}</div>
             {!isConnecting && !paintMode && (
               <button
-                className="absolute -top-1 -right-1 w-5 h-5 bg-black/70 text-white rounded-full text-[12px] opacity-0 group-hover:opacity-100"
+                className="absolute -top-1 -right-1 w-5 h-5 bg-black/80 text-white rounded-full text-[12px] opacity-0 group-hover:opacity-100"
                 onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
                 onClick={(ev) => {
                   ev.stopPropagation();
@@ -941,7 +962,20 @@ export default function App() {
   const ClassicLayout = () => (
     <div className="max-w-7xl mx-auto p-3 grid grid-cols-12 grid-rows-12 gap-2 h-[calc(100vh-56px)]">
       <div className={setPanelStateWrapper("causes", "col-span-3 row-span-9")}>
-        <PanelHeader title="Causes" />
+        <PanelHeader
+          title="Causes"
+          onAdd={() =>
+            addPostItToFirebase(
+              "Nouvelle cause",
+              "causes",
+              "Modérateur",
+              null,
+              null,
+              false,
+              CATEGORY_DEFAULT_COLOR.causes
+            )
+          }
+        />
         <div className="p-2 h-full overflow-y-auto">
           <ColumnList items={visiblePostIts.causes} fallbackColor="pink" title="Causes" />
         </div>
@@ -993,14 +1027,40 @@ export default function App() {
       </div>
 
       <div className={setPanelStateWrapper("consequences", "col-span-3 row-span-9")}>
-        <PanelHeader title="Conséquences" />
+        <PanelHeader
+          title="Conséquences"
+          onAdd={() =>
+            addPostItToFirebase(
+              "Nouvelle conséquence",
+              "consequences",
+              "Modérateur",
+              null,
+              null,
+              false,
+              CATEGORY_DEFAULT_COLOR.consequences
+            )
+          }
+        />
         <div className="p-2 h-full overflow-y-auto">
           <ColumnList items={visiblePostIts.consequences} fallbackColor="green" title="Conséquences" />
         </div>
       </div>
 
       <div className={setPanelStateWrapper("problems", "col-span-12 row-span-3")}>
-        <PanelHeader title="Problèmes Suggérés" />
+        <PanelHeader
+          title="Problèmes Suggérés"
+          onAdd={() =>
+            addPostItToFirebase(
+              "Nouveau problème",
+              "problem",
+              "Modérateur",
+              null,
+              null,
+              false,
+              CATEGORY_DEFAULT_COLOR.problem
+            )
+          }
+        />
         <div className="p-2 h-full overflow-x-auto">
           <div className="flex gap-2">
             <ColumnList items={visiblePostIts.problems} fallbackColor="red" title="Problèmes" />

@@ -22,7 +22,7 @@ export default function AnalysisPanel({ sessionId, projectName, theme, postIts =
     return [
       { name: "Problèmes", key: "problem", value: counts.problem, color: COLORS.problem },
       { name: "Causes", key: "causes", value: counts.causes, color: COLORS.causes },
-      { name: "Conséquences", key: "conséquences", value: counts.consequences, color: COLORS.consequences },
+      { name: "Conséquences", key: "consequences", value: counts.consequences, color: COLORS.consequences },
     ];
   }, [postIts]);
 
@@ -178,14 +178,13 @@ export default function AnalysisPanel({ sessionId, projectName, theme, postIts =
     ];
   }, [postIts, connections, byAuthor, byCategory, hubs, roots, leaves, isolated, hasCycle, byId]);
 
-  // ---------- Synthèse IA (éditable) ----------
   const makeDeepAnalysis = useCallback(() => {
     const title = `SYNTHÈSE AUTOMATIQUE (éditable)`;
     const header =
 `${title}
 
 Aperçu global : ${postIts.length} étiquettes, ${connections.length} liaisons.
-Répartition : Problèmes ${byCategory.find(c=>c.key==="problem")?.value||0}, Causes ${byCategory.find(c=>c.key==="causes")?.value||0}, Conséquences ${byCategory.find(c=>c.key==="conséquences")?.value||0}.
+Répartition : Problèmes ${byCategory.find(c=>c.key==="problem")?.value||0}, Causes ${byCategory.find(c=>c.key==="causes")?.value||0}, Conséquences ${byCategory.find(c=>c.key==="consequences")?.value||0}.
 Hubs : ${hubs.map(h => (byId[h.p.id]?.content || "•") + ` (${(degrees.inDeg.get(h.p.id)||0)+(degrees.outDeg.get(h.p.id)||0)})`).join(" ; ") || "—"}.
 Racines (sans parents) : ${roots.slice(0,5).map(r=>r.content).join(" ; ") || "—"}.
 Feuilles (sans enfants) : ${leaves.slice(0,5).map(f=>f.content).join(" ; ") || "—"}.
@@ -236,7 +235,7 @@ Isolées : ${isolated.length}. Cycles : ${hasCycle ? "oui" : "non"}.
   }, [
     postIts, connections, byCategory, hubs, byId, degrees, roots, leaves,
     isolated, hasCycle, chains, projectName, theme
-  ]) ;
+  ]);
 
   const [analysisText, setAnalysisText] = useState(makeDeepAnalysis());
 
