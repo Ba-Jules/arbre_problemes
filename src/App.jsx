@@ -6,7 +6,7 @@ import {
   query,
   where,
 } from "firebase/firestore";
-import { db } from "../firebase-config";
+import { db } from "./firebase-config";
 
 const CATEGORY_LABELS = {
   problem: "Problèmes",
