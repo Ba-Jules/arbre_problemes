@@ -583,15 +583,6 @@ export default function App() {
           zIndex: 3,
         }}
         onMouseDown={(e) => handleMouseDown(e, p.id)}
-        title={
-          paintMode
-            ? "Cliquez pour appliquer la couleur"
-            : isConnecting
-            ? connectSourceId
-              ? "Cliquez la CIBLE"
-              : "Cliquez la SOURCE"
-            : "Glissez pour déplacer"
-        }
       >
         {/* + discrets haut/bas — petits ronds noirs SUR le post-it */}
         {mode === "moderator" && !isConnecting && (
@@ -628,8 +619,7 @@ export default function App() {
           style={{
             backgroundColor: color.bg,
             borderColor: color.border,
-            // Lisibilité
-            color: "#111827",
+            color: "#111827", // noir
             fontFamily: "'Arial Black', Arial, sans-serif",
             lineHeight: 1.2,
             WebkitFontSmoothing: "antialiased",
@@ -686,8 +676,8 @@ export default function App() {
             {p.content}
           </div>
 
-          {/* Auteur : masqué par défaut, visible au survol ; n’apparaît pas en PDF */}
-          <div className="absolute left-2 bottom-1 text-[11px] text-black/80 bg-white/85 rounded px-1 leading-4 border border-black/10 opacity-0 group-hover:opacity-100 pointer-events-none">
+          {/* Auteur : masqué par défaut, visible au survol (n’apparaît pas à l’impression) */}
+          <div className="absolute left-2 bottom-1 text-[11px] text-black/80 bg-white/85 rounded px-1 leading-4 border border-black/10 opacity-0 group-hover:opacity-100 pointer-events-none print:hidden">
             {p.author}
           </div>
         </div>
@@ -833,7 +823,6 @@ export default function App() {
             <button
               className="ml-auto px-3 py-1 rounded text-sm font-semibold bg-slate-200 text-slate-700"
               onClick={goBackToWorkshop}
-              title="Retour à l’atelier"
             >
               ← Retour à l’atelier
             </button>
@@ -895,6 +884,29 @@ export default function App() {
       const y = (pageHeight - h) / 2;
       pdf.addImage(imgData, "PNG", x, y, w, h);
       pdf.save(`arbre-${sessionId}.pdf`);
+    } finally {
+      node.style.transform = prevTransform || "";
+    }
+  };
+
+  /* >>> NOUVEAU : Export PNG HD */
+  const exportTreeAsPNG = async () => {
+    const node = treeAreaRef.current;
+    if (!node) return;
+    const prevTransform = node.style.transform;
+    try {
+      node.style.transform = "scale(1)";
+      const canvas = await html2canvas(node, {
+        scale: 3,
+        backgroundColor: "#ffffff",
+        letterRendering: true,
+        useCORS: true,
+      });
+      const url = canvas.toDataURL("image/png");
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `arbre-${sessionId}.png`;
+      a.click();
     } finally {
       node.style.transform = prevTransform || "";
     }
@@ -964,7 +976,7 @@ export default function App() {
 
             {!isConnecting && !paintMode && (
               <button
-                className="absolute -top-1 -right-1 w-5 h-5 bg.black/80 bg-black/80 text-white rounded-full text-[12px] opacity-0 group-hover:opacity-100"
+                className="absolute -top-1 -right-1 w-5 h-5 bg-black/80 text-white rounded-full text-[12px] opacity-0 group-hover:opacity-100"
                 onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
                 onClick={(ev) => {
                   ev.stopPropagation();
@@ -1011,6 +1023,7 @@ export default function App() {
           <button className="px-2 py-0.5 rounded bg-slate-200 text-slate-700" onClick={zoomIn} title="Zoomer">+</button>
           <button className="px-2 py-0.5 rounded bg-slate-200 text-slate-700" onClick={zoomFit} title="Ajuster">Ajuster</button>
           <button className="ml-2 px-2 py-0.5 rounded bg-indigo-600 text-white" onClick={exportTreeAsPDF} title="Exporter l’arbre en PDF">Exporter PDF</button>
+          <button className="px-2 py-0.5 rounded bg-emerald-600 text-white" onClick={exportTreeAsPNG} title="Exporter l’arbre en PNG">Exporter PNG</button>
           <span className="ml-auto text-xs text-slate-500">Astuce&nbsp;: Ctrl/⌘ + molette</span>
         </div>
 
@@ -1133,6 +1146,7 @@ export default function App() {
         <button className="px-2 py-1 rounded bg-slate-200" onClick={zoomIn} title="Zoomer">+</button>
         <button className="px-2 py-1 rounded bg-slate-200" onClick={zoomFit} title="Ajuster">Ajuster</button>
         <button className="px-2 py-1 rounded bg-indigo-600 text-white" onClick={exportTreeAsPDF} title="Exporter l’arbre en PDF">Exporter PDF</button>
+        <button className="px-2 py-1 rounded bg-emerald-600 text-white" onClick={exportTreeAsPNG} title="Exporter l’arbre en PNG">Exporter PNG</button>
       </div>
 
       {!dockHidden && (dockPosition === "right" ? (
@@ -1323,7 +1337,6 @@ export default function App() {
           </div>
           <div className="p-3">
             <div className="w-full flex justify-center">
-              {/* lien affiché dessous, jamais surimprimé ; taille réduite */}
               <QRCodeGenerator url={participantUrl} showLink={true} size={120} />
             </div>
           </div>
