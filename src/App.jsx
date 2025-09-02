@@ -1,53 +1,12 @@
-// src/App.jsx
-import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+// src/components/AnalysisPanel.jsx
+import React, { useEffect, useMemo, useState } from "react";
 import {
   collection,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  doc,
   onSnapshot,
   query,
   where,
-  serverTimestamp,
-  setDoc,
-  getDoc,
 } from "firebase/firestore";
-import { db } from "./firebase-config";
-
-// Composants locaux
-import QRCodeGenerator from "./components/QRCodeGenerator.jsx";
-import AnalysisPanel from "./components/AnalysisPanel.jsx";
-import ArbreProblemePresentation from "./components/ArbreProblemePresentation.jsx";
-
-/* ========================= Constantes UI ========================= */
-
-const POSTIT_W = 220;
-const POSTIT_H = 90;
-const MAX_CHARS = 50;
-
-// Palette de couleurs (nom → {bg,text,border})
-const COLOR_PALETTE = {
-  red: { bg: "#ef4444", text: "#ffffff", border: "#dc2626" },
-  pink: { bg: "#fb7185", text: "#ffffff", border: "#f43f5e" },
-  green: { bg: "#22c55e", text: "#ffffff", border: "#16a34a" },
-  teal: { bg: "#14b8a6", text: "#ffffff", border: "#0d9488" },
-  blue: { bg: "#3b82f6", text: "#ffffff", border: "#2563eb" },
-  amber: { bg: "#f59e0b", text: "#111827", border: "#d97706" },
-};
-
-// catégories + couleurs par défaut conseillées
-const CATEGORY_DEFAULT_COLOR = {
-  problem: "red",
-  causes: "pink",
-  consequences: "green",
-};
+import { db } from "../firebase-config";
 
 const CATEGORY_LABELS = {
   problem: "Problèmes",
@@ -55,1265 +14,396 @@ const CATEGORY_LABELS = {
   consequences: "Conséquences",
 };
 
-const defaultPanelStates = {
-  causes: "normal", // minimized | normal | maximized
-  tree: "normal",
-  consequences: "normal",
-  problems: "normal",
-};
+function useDataFallback({ sessionId, postItsProp, connectionsProp }) {
+  const [postIts, setPostIts] = useState(postItsProp || []);
+  const [connections, setConnections] = useState(connectionsProp || []);
 
-/* ========================= App ========================= */
-
-export default function App() {
-  /* -------- Mode & session -------- */
-  const [mode, setMode] = useState("moderator"); // "moderator" | "participant"
-  const [sessionId, setSessionId] = useState("PROBLEM-TREE-2025");
-
-  /* -------- Données Firestore -------- */
-  const [postIts, setPostIts] = useState([]);
-  const [connections, setConnections] = useState([]);
-
-  /* -------- UI state -------- */
-  const [panelStates, setPanelStates] = useState(defaultPanelStates);
-
-  // Zoom de l’arbre (0.5 → 2.0)
-  const [zoom, setZoom] = useState(1);
-  const treeScrollRef = useRef(null);
-
-  // Connexion (relier post-its)
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [connectSourceId, setConnectSourceId] = useState(null);
-
-  // Mode Peindre (appliquer couleur active sur clic)
-  const [paintMode, setPaintMode] = useState(false);
-
-  // Drag & drop
-  const [selectedPostIt, setSelectedPostIt] = useState(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-
-  // Édition du contenu
-  const [editingId, setEditingId] = useState(null);
-  const [editingText, setEditingText] = useState("");
-
-  // Couleur active (pour les créations) + retouche
-  const [activeColor, setActiveColor] = useState("red");
-
-  // Métadonnées session
-  const [projectName, setProjectName] = useState("");
-  const [theme, setTheme] = useState("");
-
-  // Panneaux latéraux (on garde le tiroir pour debug si besoin)
-  const [showQR, setShowQR] = useState(false);
-  const [showAnalysis, setShowAnalysis] = useState(false);
-
-  // Présentation (écran d’accueil)
-  const [showPresentation, setShowPresentation] = useState(false);
-
-  /* -------- Participant -------- */
-  const [participantName, setParticipantName] = useState(
-    () => localStorage.getItem("participantName") || ""
-  );
-  const [isAnonymous, setIsAnonymous] = useState(
-    () => (localStorage.getItem("participantName") || "") === "Anonyme"
-  );
-  const [selectedCategory, setSelectedCategory] = useState("problem");
-  const [participantContent, setParticipantContent] = useState("");
-
-  /* -------- Standalone Analysis -------- */
-  const [standaloneAnalysis, setStandaloneAnalysis] = useState(false);
-
-  /* -------- Refs -------- */
-  const treeAreaRef = useRef(null);
-
-  /* -------- URL participant -------- */
-  const participantUrl = useMemo(() => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("session", sessionId);
-    url.searchParams.set("mode", "participant");
-    url.searchParams.delete("analysis");
-    return url.toString();
-  }, [sessionId]);
-
-  /* ========================= Helpers ========================= */
-
-  const generateSessionId = () => {
-    const d = new Date();
-    const p = (n) => String(n).padStart(2, "0");
-    return `PROBLEM-TREE-${d.getFullYear()}${p(d.getMonth() + 1)}${p(
-      d.getDate()
-    )}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-  };
-
-  const navigateToSession = (id) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("session", id);
-    window.history.replaceState({}, "", url.toString());
-    setSessionId(id);
-  };
-
-  const newSession = async () => {
-    const id = generateSessionId();
-    navigateToSession(id);
-    setPostIts([]);
-    setConnections([]);
-    setProjectName("");
-    setTheme("");
-    setShowAnalysis(false);
-    setShowQR(false);
-    setIsConnecting(false);
-    setConnectSourceId(null);
-    setPaintMode(false);
-    setShowPresentation(true); // démarrer par l’écran de présentation
-
-    try {
-      await setDoc(
-        doc(db, "sessions", id),
-        { sessionId: id, createdAt: serverTimestamp(), status: "active" },
-        { merge: true }
-      );
-    } catch {
-      /* no-op */
-    }
-  };
-
-  /* ========================= URL params ========================= */
+  useEffect(() => setPostIts(postItsProp || []), [postItsProp]);
+  useEffect(() => setConnections(connectionsProp || []), [connectionsProp]);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const m = params.get("mode");
-    const s = params.get("session");
-    const a = params.get("analysis");
-    if (m === "participant") setMode("participant");
-    if (s) setSessionId(s);
-    if (a === "1" || m === "analysis") setStandaloneAnalysis(true);
-  }, []);
-
-  /* ========================= Charger métadonnées session ========================= */
-
-  useEffect(() => {
-    if (!sessionId) return;
-    const ref = doc(db, "sessions", sessionId);
-    getDoc(ref)
-      .then((snap) => {
-        if (snap.exists()) {
-          const data = snap.data();
-          setProjectName(data.projectName || "");
-          setTheme(data.theme || "");
-          if (mode !== "participant" && !(data.projectName || data.theme)) {
-            setShowPresentation(true);
-          }
-        } else {
-          if (mode !== "participant") setShowPresentation(true);
-        }
-      })
-      .catch(() => {});
-  }, [sessionId, mode]);
-
-  /* ========================= Firestore listeners ========================= */
-
-  useEffect(() => {
+    if (postItsProp && connectionsProp) return;
     if (!sessionId) return;
 
-    const qP = query(
-      collection(db, "postits"),
-      where("sessionId", "==", sessionId)
-    );
-    const unsubP = onSnapshot(qP, (snap) => {
-      const arr = [];
-      snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
-      arr.sort(
-        (a, b) =>
-          (a.timestamp?.toMillis?.() || 0) - (b.timestamp?.toMillis?.() || 0)
-      );
-      setPostIts(arr);
-    });
-
-    const qC = query(
-      collection(db, "connections"),
-      where("sessionId", "==", sessionId)
-    );
-    const unsubC = onSnapshot(qC, (snap) => {
-      const arr = [];
-      snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
-      setConnections(arr);
-    });
-
-    return () => {
-      unsubP();
-      unsubC();
-    };
-  }, [sessionId]);
-
-  /* ========================= CRUD Post-its ========================= */
-
-  const addPostItToFirebase = async (
-    content,
-    category,
-    author,
-    x = null,
-    y = null,
-    isInTree = false,
-    colorName = null
-  ) => {
-    const clean = (content || "").trim();
-    if (!clean) return;
-
-    const defaults = {
-      causes: { x: 40, y: Math.random() * 120 + 50 },
-      consequences: { x: 860, y: Math.random() * 120 + 50 },
-      problem: { x: 420, y: Math.random() * 120 + 50 },
-    };
-    const pos =
-      x !== null && y !== null ? { x, y } : defaults[category] || defaults.problem;
-
-    const applyColor =
-      colorName ||
-      CATEGORY_DEFAULT_COLOR[category] ||
-      activeColor ||
-      "red";
-
-    try {
-      await addDoc(collection(db, "postits"), {
-        sessionId,
-        content: clean.slice(0, MAX_CHARS),
-        author,
-        category, // "problem" | "causes" | "consequences"
-        x: pos.x,
-        y: pos.y,
-        isInTree,
-        isCentral: false,
-        color: applyColor, // nom dans COLOR_PALETTE
-        childIds: [],
-        timestamp: serverTimestamp(),
-      });
-    } catch (e) {
-      console.error(e);
-      alert("Impossible d’ajouter le post-it.");
-    }
-  };
-
-  const updatePostItInFirebase = async (id, fields) => {
-    try {
-      await updateDoc(doc(db, "postits", id), fields);
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const deletePostItFromFirebase = async (id) => {
-    try {
-      await deleteDoc(doc(db, "postits", id));
-      const rel = connections.filter(
-        (c) => c.fromId === id || c.toId === id
-      );
-      await Promise.all(
-        rel.map((c) => deleteDoc(doc(db, "connections", c.id)))
-      );
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  /* ========================= Drag & Drop / Click handlers ========================= */
-
-  const handleMouseDown = (e, postItId) => {
-    if (mode !== "moderator") return;
-    e.preventDefault();
-
-    if (paintMode) {
-      updatePostItInFirebase(postItId, {
-        color: activeColor,
-        updatedAt: serverTimestamp(),
-      });
-      return;
-    }
-
-    if (isConnecting) {
-      if (!connectSourceId) {
-        setConnectSourceId(postItId);
-      } else if (connectSourceId !== postItId) {
-        addDoc(collection(db, "connections"), {
-          sessionId,
-          fromId: connectSourceId,
-          toId: postItId,
-          createdAt: serverTimestamp(),
-        }).catch(console.error);
-        setConnectSourceId(null);
-      } else {
-        setConnectSourceId(null);
+    const unsubP = onSnapshot(
+      query(collection(db, "postits"), where("sessionId", "==", sessionId)),
+      (snap) => {
+        const arr = [];
+        snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
+        setPostIts(arr);
       }
-      return;
-    }
+    );
 
-    setSelectedPostIt(postItId);
-    setIsDragging(true);
-    const rect = e.currentTarget.getBoundingClientRect();
-    setDragOffset({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    const unsubC = onSnapshot(
+      query(collection(db, "connections"), where("sessionId", "==", sessionId)),
+      (snap) => {
+        const arr = [];
+        snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
+        setConnections(arr);
+      }
+    );
+
+    return () => {
+      unsubP && unsubP();
+      unsubC && unsubC();
+    };
+  }, [sessionId, postItsProp, connectionsProp]);
+
+  return { postIts, connections };
+}
+
+function buildGraph(postIts, connections) {
+  const nodes = {};
+  postIts.forEach((p) => {
+    nodes[p.id] = {
+      ...p,
+      indeg: 0,
+      outdeg: 0,
+    };
+  });
+
+  const edges = connections
+    .filter((c) => nodes[c.fromId] && nodes[c.toId])
+    .map((c) => ({ from: c.fromId, to: c.toId }));
+
+  edges.forEach((e) => {
+    nodes[e.from].outdeg++;
+    nodes[e.to].indeg++;
+  });
+
+  const adj = {};
+  const radj = {};
+  Object.keys(nodes).forEach((id) => {
+    adj[id] = [];
+    radj[id] = [];
+  });
+  edges.forEach((e) => {
+    adj[e.from].push(e.to);
+    radj[e.to].push(e.from);
+  });
+
+  return { nodes, edges, adj, radj };
+}
+
+function findCyclesLimited(adj, limit = 3, maxLen = 8) {
+  // DFS simple, retourne quelques cycles au plus
+  const cycles = [];
+  const stack = [];
+  const visited = new Set();
+  const keys = Object.keys(adj);
+
+  const dfs = (u, start, seenSet) => {
+    if (cycles.length >= limit) return;
+    seenSet.add(u);
+    stack.push(u);
+    for (const v of adj[u] || []) {
+      if (v === start && stack.length > 1) {
+        cycles.push([...stack, start]);
+        if (cycles.length >= limit) break;
+      } else if (!seenSet.has(v) && stack.length < maxLen) {
+        dfs(v, start, new Set(seenSet));
+        if (cycles.length >= limit) break;
+      }
+    }
+    stack.pop();
   };
 
-  const handleMouseMove = useCallback(
-    (e) => {
-      if (!isDragging || !selectedPostIt) return;
-      const area = treeAreaRef.current;
-      if (!area) return;
+  for (const k of keys) {
+    if (cycles.length >= limit) break;
+    dfs(k, k, new Set());
+  }
+  return cycles;
+}
 
-      const rect = area.getBoundingClientRect();
-      const relX = (e.clientX - rect.left) / zoom;
-      const relY = (e.clientY - rect.top) / zoom;
+function topByDegree(nodes, n = 5) {
+  const arr = Object.values(nodes);
+  arr.sort((a, b) => b.indeg + b.outdeg - (a.indeg + a.outdeg));
+  return arr.slice(0, n);
+}
 
-      const newX = Math.max(
-        0,
-        Math.min(rect.width / zoom - POSTIT_W, relX - dragOffset.x)
-      );
-      const newY = Math.max(
-        0,
-        Math.min(rect.height / zoom - POSTIT_H, relY - dragOffset.y)
-      );
+function formatList(items, getText) {
+  if (!items || items.length === 0) return "—";
+  return items.map(getText).join("; ");
+}
 
-      setPostIts((prev) =>
-        prev.map((p) =>
-          p.id === selectedPostIt ? { ...p, x: newX, y: newY, isInTree: true } : p
-        )
-      );
-      updatePostItInFirebase(selectedPostIt, {
-        x: newX,
-        y: newY,
-        isInTree: true,
-      });
-    },
-    [isDragging, selectedPostIt, dragOffset.x, dragOffset.y, zoom]
+function generateAnalysisText({ postIts, connections, projectName, theme }) {
+  const { nodes, edges, adj, radj } = buildGraph(postIts, connections);
+
+  const total = postIts.length;
+  const byCat = {
+    problem: postIts.filter((p) => p.category === "problem").length,
+    causes: postIts.filter((p) => p.category === "causes").length,
+    consequences: postIts.filter((p) => p.category === "consequences").length,
+  };
+  const inTree = postIts.filter((p) => p.isInTree).length;
+  const notInTree = total - inTree;
+
+  const roots = Object.values(nodes).filter((n) => n.indeg === 0 && n.outdeg > 0);
+  const leaves = Object.values(nodes).filter((n) => n.outdeg === 0 && n.indeg > 0);
+  const isolates = Object.values(nodes).filter((n) => n.indeg === 0 && n.outdeg === 0);
+
+  const hot = topByDegree(nodes, 5);
+  const cycles = findCyclesLimited(adj, 3, 8);
+
+  const pickTitles = (arr) =>
+    arr.map((n) => `« ${n.content} » [${CATEGORY_LABELS[n.category] || n.category}]`);
+
+  // Chemins “cause → … → conséquence” (échantillon)
+  const causeIds = Object.values(nodes).filter((n) => n.category === "causes").map((n) => n.id);
+  const consIds = new Set(
+    Object.values(nodes).filter((n) => n.category === "consequences").map((n) => n.id)
   );
 
-  const handleMouseUp = () => {
-    setIsDragging(false);
-    setSelectedPostIt(null);
-  };
+  const samplePaths = [];
+  const limitPaths = 6;
+  for (const cid of causeIds) {
+    if (samplePaths.length >= limitPaths) break;
+    // BFS jusqu’à une conséquence
+    const q = [[cid]];
+    const seen = new Set([cid]);
+    let found = false;
+    while (q.length && !found) {
+      const path = q.shift();
+      const last = path[path.length - 1];
+      if (consIds.has(last) && path.length > 1) {
+        samplePaths.push(path);
+        found = true;
+        break;
+      }
+      for (const nxt of adj[last] || []) {
+        if (!seen.has(nxt)) {
+          seen.add(nxt);
+          q.push([...path, nxt]);
+        }
+      }
+    }
+  }
+
+  const idToTitle = (id) => nodes[id]?.content || id;
+  const formatPath = (p) => p.map((id) => `« ${idToTitle(id)} »`).join(" → ");
+
+  const header = [];
+  if (projectName || theme) {
+    header.push(`Projet : ${projectName || "—"} — Thème : ${theme || "—"}`);
+  }
+
+  return [
+    header.length ? header.join("\n") + "\n" : "",
+    "SYNTHÈSE AUTOMATIQUE (éditable)\n",
+    `Aperçu global : ${total} étiquettes, ${edges.length} liaisons.`,
+    `Dans l'arbre : ${inTree} — Hors arbre : ${notInTree}.`,
+    `Répartition : Problèmes ${byCat.problem}, Causes ${byCat.causes}, Conséquences ${byCat.consequences}.`,
+    "",
+    "Points structurants (nœuds les plus connectés) :",
+    formatList(hot, (n) => `« ${n.content} » (in:${n.indeg}/out:${n.outdeg})`),
+    "",
+    "Entrées majeures (sans parents) :",
+    formatList(roots, (n) => `« ${n.content} »`),
+    "",
+    "Sorties majeures (sans enfants) :",
+    formatList(leaves, (n) => `« ${n.content} »`),
+    "",
+    isolates.length
+      ? `Étiquettes isolées à intégrer ou supprimer : ${formatList(
+          isolates,
+          (n) => `« ${n.content} »`
+        )}`
+      : "Pas d'étiquettes isolées détectées.",
+    "",
+    samplePaths.length
+      ? "Chaînes typiques « cause → … → conséquence » :\n- " +
+        samplePaths.map(formatPath).join("\n- ")
+      : "Chaînes « cause → … → conséquence » : non détectées (ou non reliées).",
+    "",
+    cycles.length
+      ? "Boucles à résoudre (risque de circularité) :\n- " +
+        cycles
+          .map((cy) => cy.map((id) => `« ${idToTitle(id)} »`).join(" → "))
+          .join("\n- ")
+      : "Aucune boucle détectée.",
+    "",
+    "Pistes d’action (brouillon) :",
+    "- Regrouper les causes proches et supprimer les doublons.",
+    "- Réduire les conséquences en impacts mesurables.",
+    "- Définir un(s) problème(s) central(aux) explicitement validé(s).",
+    "- Vérifier l’absence de contradictions dans les liaisons.",
+    "- Prioriser les chaînes cause → conséquence par fréquence et criticité.",
+  ].join("\n");
+}
+
+export default function AnalysisPanel({
+  sessionId,
+  postIts: postItsProp,
+  connections: connectionsProp,
+  projectName,
+  theme,
+}) {
+  const { postIts, connections } = useDataFallback({
+    sessionId,
+    postItsProp,
+    connectionsProp,
+  });
+
+  const [analysisText, setAnalysisText] = useState("");
+
+  const metrics = useMemo(() => {
+    const byCat = {
+      problem: postIts.filter((p) => p.category === "problem").length,
+      causes: postIts.filter((p) => p.category === "causes").length,
+      consequences: postIts.filter((p) => p.category === "consequences").length,
+    };
+    return {
+      total: postIts.length,
+      edges: connections.length,
+      byCat,
+    };
+  }, [postIts, connections]);
 
   useEffect(() => {
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [handleMouseMove]);
-
-  /* ========================= Édition ========================= */
-
-  const startEditing = (p) => {
-    if (mode !== "moderator") return;
-    setEditingId(p.id);
-    setEditingText(p.content || "");
-  };
-  const cancelEditing = () => {
-    setEditingId(null);
-    setEditingText("");
-  };
-  const saveEditing = async () => {
-    if (!editingId) return;
-    await updatePostItInFirebase(editingId, {
-      content: (editingText || "").slice(0, MAX_CHARS),
-    });
-    cancelEditing();
-  };
-
-  /* ========================= Connexions (SVG) ========================= */
-
-  const renderConnections = () => {
-    const byId = Object.fromEntries(postIts.map((p) => [p.id, p]));
-    const lines = [];
-
-    connections.forEach((c) => {
-      const a = byId[c.fromId];
-      const b = byId[c.toId];
-      if (!a || !b) return;
-      lines.push({ from: a, to: b });
-    });
-
-    return lines.map((ln, i) => {
-      const x1 = (ln.from.x || 0) + POSTIT_W / 2;
-      const y1 = (ln.from.y || 0) + POSTIT_H / 2;
-      const x2 = (ln.to.x || 0) + POSTIT_W / 2;
-      const y2 = (ln.to.y || 0) + POSTIT_H / 2;
-
-      const midY = y1 + (y2 - y1) / 2;
-      const d = `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
-
-      return (
-        <path
-          key={i}
-          d={d}
-          fill="none"
-          stroke="#0f172a"
-          strokeWidth="3"
-          markerEnd="url(#arrowhead)"
-          opacity="0.9"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
+    // (Re)générer si vide
+    if (!analysisText) {
+      setAnalysisText(
+        generateAnalysisText({ postIts, connections, projectName, theme })
       );
-    });
-  };
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [postIts, connections, projectName, theme]);
 
-  /* ========================= Panneaux Windows-like ========================= */
-
-  const setPanelState = (panel, state) => {
-    setPanelStates((prev) => ({ ...prev, [panel]: state }));
-  };
-  const minimizePanel = (panel) => setPanelState(panel, "minimized");
-  const maximizePanel = (panel) =>
-    setPanelStates({
-      causes: panel === "causes" ? "maximized" : "minimized",
-      tree: panel === "tree" ? "maximized" : "minimized",
-      consequences: panel === "consequences" ? "maximized" : "minimized",
-      problems: panel === "problems" ? "maximized" : "minimized",
-    });
-  const restorePanels = () => setPanelStates(defaultPanelStates);
-
-  const getPanelClasses = (panel, base) => {
-    const st = panelStates[panel];
-    if (st === "maximized") return "col-span-12 row-span-12 z-40";
-    if (st === "minimized") return "col-span-2 row-span-2 min-h-[40px]";
-    return base;
-  };
-
-  const PanelHeader = ({ title, panel, onAdd }) => {
-    const st = panelStates[panel];
-    return (
-      <div className="flex items-center justify-between p-2 border-b bg-white/70 backdrop-blur-sm">
-        <div className="font-semibold text-sm text-slate-700">
-          {st === "minimized" ? title.split(" ")[0] : title}
-        </div>
-        <div className="flex items-center gap-2">
-          {st !== "minimized" && onAdd && (
-            <button
-              onClick={onAdd}
-              className="w-6 h-6 rounded bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700"
-              title="Ajouter un post-it"
-            >
-              +
-            </button>
-          )}
-          <button
-            onClick={() => minimizePanel(panel)}
-            className="w-6 h-6 rounded bg-slate-200 text-slate-600 text-xs"
-            title="Réduire"
-          >
-            –
-          </button>
-          <button
-            onClick={() =>
-              panelStates[panel] === "maximized"
-                ? restorePanels()
-                : maximizePanel(panel)
-            }
-            className="w-6 h-6 rounded bg-slate-200 text-slate-600 text-xs"
-            title={
-              panelStates[panel] === "maximized" ? "Restaurer" : "Agrandir"
-            }
-          >
-            □
-          </button>
-        </div>
-      </div>
+  const regenerate = () => {
+    setAnalysisText(
+      generateAnalysisText({ postIts, connections, projectName, theme })
     );
   };
 
-  /* ========================= Rendu Post-it ========================= */
+  const copyToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText(analysisText || "");
+      alert("Copié dans le presse-papiers ✅");
+    } catch {
+      alert("Impossible de copier.");
+    }
+  };
 
-  const renderPostIt = (p) => {
-    const color = COLOR_PALETTE[p.color] || COLOR_PALETTE.red;
-    const isSource = isConnecting && connectSourceId === p.id;
+  const exportPDF = async () => {
+    // Tentative avec jsPDF si dispo, sinon fallback impression
+    try {
+      const mod = await import("jspdf"); // nécessite jspdf installé
+      const { jsPDF } = mod;
+      const doc = new jsPDF({ unit: "pt", format: "a4" });
+      const margin = 40;
+      const maxWidth = 515; // 595 - 2*40
+      const title = `Analyse — ${projectName || "Projet"}${theme ? " — " + theme : ""}`;
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(14);
+      doc.text(title, margin, 40);
 
-    return (
-      <div
-        key={p.id}
-        className={`absolute select-none transition-transform ${
-          isConnecting ? "cursor-pointer" : paintMode ? "cursor-crosshair" : "cursor-move"
-        } ${isSource ? "ring-4 ring-blue-400" : ""}`}
-        style={{
-          left: p.x,
-          top: p.y,
-          width: POSTIT_W,
-          height: POSTIT_H,
-          transform: `translateZ(0)`,
-          zIndex: 3,
-        }}
-        onMouseDown={(e) => handleMouseDown(e, p.id)}
-        title={
-          paintMode
-            ? "Cliquez pour appliquer la couleur"
-            : isConnecting
-            ? connectSourceId
-              ? "Cliquez la CIBLE"
-              : "Cliquez la SOURCE"
-            : "Glissez pour déplacer"
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(11);
+
+      const lines = doc.splitTextToSize(analysisText || "", maxWidth);
+      let y = 70;
+      lines.forEach((line) => {
+        if (y > 800) {
+          doc.addPage();
+          y = 40;
         }
-      >
-        <div
-          className="rounded-lg p-3 shadow-lg border-2 relative overflow-hidden"
-          style={{
-            backgroundColor: color.bg,
-            color: color.text,
-            borderColor: color.border,
-            fontFamily: "'Arial Black', Arial, sans-serif",
-            lineHeight: 1.15,
-          }}
-        >
-          {/* Actions (crayon / supprimer / couleur) */}
-          {mode === "moderator" && !isConnecting && !paintMode && (
-            <div className="absolute -top-1 -right-1 flex gap-1">
-              <button
-                type="button"
-                className="w-5 h-5 bg-black/70 text-white rounded-full text-[11px] flex items-center justify-center"
-                title="Modifier"
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  startEditing(p);
-                }}
-              >
-                ✎
-              </button>
-              <button
-                type="button"
-                className="w-5 h-5 bg-black/70 text-white rounded-full text-[13px] flex items-center justify-center"
-                title="Couleur"
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  const keys = Object.keys(COLOR_PALETTE);
-                  const idx = Math.max(0, keys.indexOf(p.color));
-                  const next = keys[(idx + 1) % keys.length];
-                  updatePostItInFirebase(p.id, { color: next });
-                }}
-              >
-                🎨
-              </button>
-              <button
-                type="button"
-                className="w-5 h-5 bg-black/70 text-white rounded-full text-[13px] flex items-center justify-center"
-                title="Supprimer"
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  deletePostItFromFirebase(p.id);
-                }}
-              >
-                ×
-              </button>
-            </div>
-          )}
+        doc.text(line, margin, y);
+        y += 16;
+      });
 
-          {/* Contenu + compteur */}
-          <div className="font-extrabold text-[14px] break-words whitespace-normal max-h-[50px] overflow-hidden pr-6">
-            {p.content}
-          </div>
-          <div className="text-[11px] opacity-90 mt-1">{p.author}</div>
-        </div>
-      </div>
-    );
+      doc.save(`analyse_${sessionId || "session"}.pdf`);
+    } catch (e) {
+      // Fallback : fenêtre imprimable
+      const w = window.open("", "_blank", "noopener");
+      if (!w) return;
+      w.document.write(`
+        <html>
+          <head>
+            <meta charset="utf-8"/>
+            <title>Analyse — ${projectName || "Projet"}</title>
+            <style>
+              body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
+              h1 { font-size: 18px; margin-bottom: 16px; }
+              pre { white-space: pre-wrap; word-wrap: break-word; font-size: 12px; }
+            </style>
+          </head>
+          <body>
+            <h1>Analyse — ${projectName || "Projet"}${theme ? " — " + theme : ""}</h1>
+            <pre>${(analysisText || "").replace(/</g,"&lt;").replace(/>/g,"&gt;")}</pre>
+          </body>
+        </html>
+      `);
+      w.document.close();
+      w.focus();
+      w.print();
+    }
   };
-
-  /* ========================= Participant (vue unifiée) ========================= */
-
-  if (mode === "participant" && !standaloneAnalysis) {
-    const canSend =
-      participantContent.trim().length > 0 &&
-      (isAnonymous || (participantName.trim().length >= 2));
-
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-50 p-4">
-        <div className="max-w-md mx-auto">
-          {/* Entête */}
-          <div className="text-center mb-4">
-            <h1 className="text-xl font-black text-gray-900">
-              🌳 Arbre à Problèmes
-            </h1>
-            <p className="text-gray-600 text-sm">Session&nbsp;: {sessionId}</p>
-            {(projectName || theme) && (
-              <p className="text-gray-700 font-bold mt-1">
-                {projectName}
-                {theme ? " — " + theme : ""}
-              </p>
-            )}
-          </div>
-
-          {/* Carte unique : Nom/Anonyme + Catégorie + Contenu + Envoyer */}
-          <div className="bg-white rounded-xl p-5 shadow space-y-4">
-            {/* Nom + Anonyme */}
-            <div>
-              <label className="block text-sm font-bold mb-1">
-                Nom / Prénom
-              </label>
-              <input
-                type="text"
-                value={isAnonymous ? "" : participantName}
-                onChange={(e) => {
-                  setParticipantName(e.target.value);
-                  if (isAnonymous) setIsAnonymous(false);
-                }}
-                disabled={isAnonymous}
-                className="w-full p-3 border-2 border-gray-300 rounded-lg text-base disabled:opacity-60"
-                placeholder="Entrez votre nom… (ou cochez Anonyme)"
-              />
-              <label className="mt-2 inline-flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={isAnonymous}
-                  onChange={(e) => {
-                    const v = e.target.checked;
-                    setIsAnonymous(v);
-                    if (v) {
-                      setParticipantName("Anonyme");
-                    } else if (participantName === "Anonyme") {
-                      setParticipantName("");
-                    }
-                  }}
-                />
-                Participer en <strong>Anonyme</strong>
-              </label>
-            </div>
-
-            {/* Catégorie (liste déroulante) */}
-            <div>
-              <label className="block text-sm font-bold mb-1">Catégorie</label>
-              <select
-                value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                className="w-full p-3 border-2 border-gray-300 rounded-lg"
-              >
-                <option value="problem">Problèmes</option>
-                <option value="causes">Causes</option>
-                <option value="consequences">Conséquences</option>
-              </select>
-            </div>
-
-            {/* Contenu */}
-            <div>
-              <label className="block text-sm font-bold mb-1">Votre post-it</label>
-              <textarea
-                rows={4}
-                value={participantContent}
-                onChange={(e) =>
-                  setParticipantContent(e.target.value.slice(0, MAX_CHARS))
-                }
-                className="w-full p-3 border-2 border-gray-300 rounded-lg"
-                placeholder="Écrivez votre contribution…"
-              />
-              <div className="text-xs text-gray-500 mt-1 text-right">
-                {MAX_CHARS - (participantContent?.length || 0)} car. restants
-              </div>
-            </div>
-
-            {/* Envoyer */}
-            <button
-              type="button"
-              className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold disabled:opacity-40"
-              disabled={!canSend}
-              onClick={async () => {
-                const author = isAnonymous ? "Anonyme" : participantName.trim();
-                await addPostItToFirebase(
-                  participantContent,
-                  selectedCategory,
-                  author,
-                  null,
-                  null,
-                  false,
-                  CATEGORY_DEFAULT_COLOR[selectedCategory] || "red"
-                );
-                // Mémoriser le choix
-                localStorage.setItem("participantName", author);
-                setParticipantContent("");
-              }}
-            >
-              Envoyer
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  /* ========================= Page d'analyse autonome (nouvel onglet) ========================= */
-
-  if (standaloneAnalysis) {
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100">
-        <div className="sticky top-0 z-40 bg-white/90 backdrop-blur border-b">
-          <div className="max-w-7xl mx-auto px-3 py-2 flex items-center gap-3">
-            <span className="text-lg">📊</span>
-            <span className="font-bold text-slate-800">Analyse — Arbre à Problèmes</span>
-            <span className="text-xs text-slate-500">Session: {sessionId}</span>
-            {(projectName || theme) && (
-              <span className="text-xs text-slate-700 font-bold">
-                • {projectName}{theme ? " — " + theme : ""}
-              </span>
-            )}
-          </div>
-        </div>
-        <div className="max-w-7xl mx-auto p-4">
-          <AnalysisPanel
-            sessionId={sessionId}
-            postIts={postIts}
-            connections={connections}
-          />
-        </div>
-      </div>
-    );
-  }
-
-  /* ========================= Modérateur ========================= */
-
-  const zoomOut = () => setZoom((z) => Math.max(0.5, +(z - 0.1).toFixed(2)));
-  const zoomIn = () => setZoom((z) => Math.min(2, +(z + 0.1).toFixed(2)));
-  const zoomFit = () => {
-    const wrap = treeScrollRef.current;
-    const area = treeAreaRef.current;
-    if (!wrap || !area) return;
-    const contentW = area.scrollWidth;
-    const contentH = area.scrollHeight;
-    const availW = wrap.clientWidth;
-    const availH = wrap.clientHeight;
-    const factor = Math.max(
-      0.5,
-      Math.min(2, +(Math.min(availW / contentW, availH / contentH)).toFixed(2))
-    );
-    setZoom(factor || 1);
-  };
-
-  const visiblePostIts = {
-    inTree: postIts.filter((p) => p.isInTree),
-    causes: postIts.filter((p) => p.category === "causes" && !p.isInTree),
-    consequences: postIts.filter((p) => p.category === "consequences" && !p.isInTree),
-    problems: postIts.filter((p) => p.category === "problem" && !p.isInTree),
-  };
-
-  const handlePresentationComplete = async ({ projectName: p, theme: t }) => {
-    await setDoc(
-      doc(db, "sessions", sessionId),
-      { projectName: p, theme: t, updatedAt: serverTimestamp() },
-      { merge: true }
-    );
-    setProjectName(p || "");
-    setTheme(t || "");
-    setShowPresentation(false);
-  };
-
-  if (showPresentation && mode !== "participant") {
-    return (
-      <ArbreProblemePresentation
-        sessionId={sessionId}
-        onComplete={handlePresentationComplete}
-        defaultProjectName={projectName}
-        defaultTheme={theme}
-      />
-    );
-  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100">
-      {/* ======= Header compact (1 ligne) ======= */}
-      <div className="sticky top-0 z-40 bg-white/90 backdrop-blur border-b">
-        <div className="max-w-7xl mx-auto px-3 py-2 flex items-center gap-2">
-          <div className="flex items-center gap-2">
-            <span className="text-lg">🌳</span>
-            <span className="font-bold text-slate-800">
-              Arbre à Problèmes
-            </span>
-            <span className="text-xs text-slate-500">
-              Session: {sessionId}
-            </span>
-          </div>
-
-          {/* Projet / Thème */}
-          <div className="ml-3 flex items-center gap-2 flex-1">
-            <input
-              className="px-3 py-1 border rounded text-sm font-bold"
-              placeholder="Nom du projet"
-              value={projectName}
-              onChange={(e) => setProjectName(e.target.value)}
-              onBlur={async () => {
-                await setDoc(
-                  doc(db, "sessions", sessionId),
-                  { projectName },
-                  { merge: true }
-                );
-              }}
-            />
-            <input
-              className="px-3 py-1 border rounded text-sm font-bold"
-              placeholder="Thème"
-              value={theme}
-              onChange={(e) => setTheme(e.target.value)}
-              onBlur={async () => {
-                await setDoc(
-                  doc(db, "sessions", sessionId),
-                  { theme },
-                  { merge: true }
-                );
-              }}
-            />
-          </div>
-
-          {/* Palette rapide */}
-          <div className="hidden md:flex items-center gap-1">
-            {Object.keys(COLOR_PALETTE).map((k) => (
-              <button
-                key={k}
-                className={`w-4 h-4 rounded ${
-                  activeColor === k ? "ring-2 ring-slate-700" : ""
-                }`}
-                style={{ backgroundColor: COLOR_PALETTE[k].bg }}
-                title={`Couleur par défaut: ${k}`}
-                onClick={() => setActiveColor(k)}
-              />
-            ))}
-          </div>
-
-          {/* Boutons actions */}
-          <div className="flex items-center gap-2">
-            <button
-              className={`px-3 py-1 rounded text-sm font-semibold ${
-                paintMode
-                  ? "bg-yellow-400 text-black"
-                  : "bg-slate-200 text-slate-700"
-              }`}
-              onClick={() => {
-                setPaintMode((v) => !v);
-                if (!paintMode) {
-                  setIsConnecting(false);
-                  setConnectSourceId(null);
-                }
-              }}
-              title="Appliquer la couleur active sur clic de post-it"
-            >
-              Peindre
-            </button>
-
-            <button
-              className={`px-3 py-1 rounded text-sm font-semibold ${
-                isConnecting
-                  ? "bg-blue-600 text-white"
-                  : "bg-slate-200 text-slate-700"
-              }`}
-              onClick={() => {
-                setIsConnecting((v) => !v);
-                setConnectSourceId(null);
-                if (!isConnecting) setPaintMode(false);
-              }}
-              title="Relier des post-its"
-            >
-              Connecter
-            </button>
-
-            <button
-              className="px-3 py-1 rounded text-sm font-semibold bg-slate-200 text-slate-700"
-              onClick={newSession}
-              title="Nouvelle session"
-            >
-              Nouvelle session
-            </button>
-
-            {/* Analyse => nouvel onglet */}
-            <button
-              className="px-3 py-1 rounded text-sm font-semibold bg-emerald-600 text-white"
-              onClick={() => {
-                const url = new URL(window.location.href);
-                url.searchParams.set("analysis", "1");
-                url.searchParams.delete("mode"); // s'assurer d'une vue dédiée
-                window.open(url.toString(), "_blank", "noopener");
-                // Option: garder le tiroir accessible en Alt+Click
-                // setShowAnalysis((v) => !v);
-              }}
-              title="Analyse (ouvre un nouvel onglet)"
-            >
-              Analyse
-            </button>
-
-            <button
-              className="px-3 py-1 rounded text-sm font-semibold bg-slate-200 text-slate-700"
-              onClick={() => setShowQR((v) => !v)}
-              title="QR participants"
-            >
-              QR
-            </button>
-          </div>
-        </div>
+    <div className="space-y-3">
+      {/* Statistiques rapides */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge>Étiquettes : {metrics.total}</Badge>
+        <Badge>Liens : {metrics.edges}</Badge>
+        <Badge titre="Problèmes">{metrics.byCat.problem}</Badge>
+        <Badge titre="Causes" color="pink">{metrics.byCat.causes}</Badge>
+        <Badge titre="Conséquences" color="green">{metrics.byCat.consequences}</Badge>
       </div>
 
-      {/* ======= Corps ======= */}
-      <div className="max-w-7xl mx-auto p-3 grid grid-cols-12 grid-rows-12 gap-2 h-[calc(100vh-56px)]">
-        {/* Causes */}
-        <div
-          className={`bg-white rounded shadow border ${getPanelClasses(
-            "causes",
-            "col-span-3 row-span-9"
-          )}`}
+      {/* Actions */}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          className="px-3 py-1 rounded bg-emerald-600 text-white text-sm font-semibold"
+          onClick={regenerate}
+          title="Recalculer la synthèse automatique"
         >
-          <PanelHeader
-            title="Causes"
-            panel="causes"
-            onAdd={() =>
-              addPostItToFirebase(
-                "Nouvelle cause",
-                "causes",
-                "Modérateur",
-                null,
-                null,
-                false,
-                CATEGORY_DEFAULT_COLOR.causes
-              )
-            }
-          />
-          <div className="p-2 h-full overflow-y-auto">
-            <div className="space-y-2">
-              {visiblePostIts.causes.map((p) => {
-                const color = COLOR_PALETTE[p.color] || COLOR_PALETTE.pink;
-                return (
-                  <div
-                    key={p.id}
-                    className="p-3 rounded border-2 shadow-sm group relative select-none"
-                    style={{
-                      backgroundColor: color.bg,
-                      color: color.text,
-                      borderColor: color.border,
-                      fontFamily: "'Arial Black', Arial, sans-serif",
-                    }}
-                    onMouseDown={(e) => handleMouseDown(e, p.id)}
-                    title={paintMode ? "Cliquez pour appliquer la couleur" : undefined}
-                  >
-                    <div className="font-extrabold text-sm break-words">
-                      {p.content}
-                    </div>
-                    <div className="text-[11px] opacity-90">{p.author}</div>
-                    {!isConnecting && !paintMode && (
-                      <button
-                        className="absolute -top-1 -right-1 w-5 h-5 bg-black/70 text-white rounded-full text-[12px] opacity-0 group-hover:opacity-100"
-                        onClick={(ev) => {
-                          ev.stopPropagation();
-                          deletePostItFromFirebase(p.id);
-                        }}
-                        title="Supprimer"
-                      >
-                        ×
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-
-        {/* Arbre */}
-        <div
-          className={`bg-white rounded shadow border ${getPanelClasses(
-            "tree",
-            "col-span-6 row-span-9"
-          )}`}
+          Régénérer la synthèse
+        </button>
+        <button
+          className="px-3 py-1 rounded bg-slate-200 text-slate-800 text-sm font-semibold"
+          onClick={copyToClipboard}
         >
-          <PanelHeader title="Arbre à Problèmes" panel="tree" />
-          {/* Contrôles de zoom */}
-          <div className="px-2 py-1 border-b flex items-center gap-2 text-sm">
-            <button
-              className="px-2 py-0.5 rounded bg-slate-200 text-slate-700"
-              onClick={zoomOut}
-              title="Dézoomer"
-            >
-              –
-            </button>
-            <span className="min-w-[44px] text-center font-semibold">
-              {Math.round(zoom * 100)}%
-            </span>
-            <button
-              className="px-2 py-0.5 rounded bg-slate-200 text-slate-700"
-              onClick={zoomIn}
-              title="Zoomer"
-            >
-              +
-            </button>
-            <button
-              className="px-2 py-0.5 rounded bg-slate-200 text-slate-700"
-              onClick={zoomFit}
-              title="Ajuster"
-            >
-              Ajuster
-            </button>
-            <span className="ml-auto text-xs text-slate-500">
-              Astuce&nbsp;: Ctrl/⌘ + molette
-            </span>
-          </div>
-
-          {/* Zone scrollable + zoomée */}
-          <div
-            ref={treeScrollRef}
-            className="relative w-full h-[calc(100%-56px)] overflow-auto"
-            onWheel={(e) => {
-              if (e.ctrlKey || e.metaKey) {
-                e.preventDefault();
-                const delta = e.deltaY > 0 ? -0.05 : 0.05;
-                setZoom((z) =>
-                  Math.max(0.5, Math.min(2, +(z + delta).toFixed(2)))
-                );
-              }
-            }}
-          >
-            <div
-              ref={treeAreaRef}
-              className="relative"
-              style={{
-                width: 2000,
-                height: 1200,
-                transform: `scale(${zoom})`,
-                transformOrigin: "0 0",
-              }}
-            >
-              {/* SVG des connexions */}
-              <svg
-                className="absolute inset-0 w-[2000px] h-[1200px] pointer-events-none"
-                style={{ zIndex: 2 }}
-              >
-                <defs>
-                  <marker
-                    id="arrowhead"
-                    markerWidth="10"
-                    markerHeight="7"
-                    refX="9"
-                    refY="3.5"
-                    orient="auto"
-                  >
-                    <polygon points="0 0, 10 3.5, 0 7" fill="#0f172a" />
-                  </marker>
-                </defs>
-                {renderConnections()}
-              </svg>
-
-              {/* Post-its dans l’arbre */}
-              {visiblePostIts.inTree.map(renderPostIt)}
-            </div>
-          </div>
-        </div>
-
-        {/* Conséquences */}
-        <div
-          className={`bg-white rounded shadow border ${getPanelClasses(
-            "consequences",
-            "col-span-3 row-span-9"
-          )}`}
+          Copier le texte
+        </button>
+        <button
+          className="px-3 py-1 rounded bg-indigo-600 text-white text-sm font-semibold"
+          onClick={exportPDF}
         >
-          <PanelHeader
-            title="Conséquences"
-            panel="consequences"
-            onAdd={() =>
-              addPostItToFirebase(
-                "Nouvelle conséquence",
-                "consequences",
-                "Modérateur",
-                null,
-                null,
-                false,
-                CATEGORY_DEFAULT_COLOR.consequences
-              )
-            }
-          />
-          <div className="p-2 h-full overflow-y-auto">
-            <div className="space-y-2">
-              {visiblePostIts.consequences.map((p) => {
-                const color = COLOR_PALETTE[p.color] || COLOR_PALETTE.green;
-                return (
-                  <div
-                    key={p.id}
-                    className="p-3 rounded border-2 shadow-sm group relative select-none"
-                    style={{
-                      backgroundColor: color.bg,
-                      color: color.text,
-                      borderColor: color.border,
-                      fontFamily: "'Arial Black', Arial, sans-serif",
-                    }}
-                    onMouseDown={(e) => handleMouseDown(e, p.id)}
-                    title={paintMode ? "Cliquez pour appliquer la couleur" : undefined}
-                  >
-                    <div className="font-extrabold text-sm break-words">
-                      {p.content}
-                    </div>
-                    <div className="text-[11px] opacity-90">{p.author}</div>
-                    {!isConnecting && !paintMode && (
-                      <button
-                        className="absolute -top-1 -right-1 w-5 h-5 bg-black/70 text-white rounded-full text-[12px] opacity-0 group-hover:opacity-100"
-                        onClick={(ev) => {
-                          ev.stopPropagation();
-                          deletePostItFromFirebase(p.id);
-                        }}
-                        title="Supprimer"
-                      >
-                        ×
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-
-        {/* Problèmes suggérés */}
-        <div
-          className={`bg-white rounded shadow border ${getPanelClasses(
-            "problems",
-            "col-span-12 row-span-3"
-          )}`}
-        >
-          <PanelHeader
-            title="Problèmes Suggérés"
-            panel="problems"
-            onAdd={() =>
-              addPostItToFirebase(
-                "Nouveau problème",
-                "problem",
-                "Modérateur",
-                null,
-                null,
-                false,
-                CATEGORY_DEFAULT_COLOR.problem
-              )
-            }
-          />
-          <div className="p-2 h-full overflow-x-auto">
-            <div className="flex gap-2">
-              {visiblePostIts.problems.map((p) => {
-                const color = COLOR_PALETTE[p.color] || COLOR_PALETTE.red;
-                return (
-                  <div
-                    key={p.id}
-                    className="p-3 rounded border-2 shadow-sm group relative select-none min-w-[220px]"
-                    style={{
-                      backgroundColor: color.bg,
-                      color: color.text,
-                      borderColor: color.border,
-                      fontFamily: "'Arial Black', Arial, sans-serif",
-                    }}
-                    onMouseDown={(e) => handleMouseDown(e, p.id)}
-                    title={paintMode ? "Cliquez pour appliquer la couleur" : undefined}
-                  >
-                    <div className="font-extrabold text-sm break-words">
-                      {p.content}
-                    </div>
-                    <div className="text-[11px] opacity-90">{p.author}</div>
-                    {!isConnecting && !paintMode && (
-                      <button
-                        className="absolute -top-1 -right-1 w-5 h-5 bg-black/70 text-white rounded-full text-[12px] opacity-0 group-hover:opacity-100"
-                        onClick={(ev) => {
-                          ev.stopPropagation();
-                          deletePostItFromFirebase(p.id);
-                        }}
-                        title="Supprimer"
-                      >
-                        ×
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
+          Télécharger en PDF
+        </button>
       </div>
 
-      {/* ======= Drawer QR ======= */}
-      {showQR && (
-        <div className="fixed top-[56px] right-3 z-50 w-[320px] bg-white rounded shadow-lg border">
-          <div className="p-3 border-b flex items-center justify-between">
-            <div className="font-semibold">QR participants</div>
-            <button
-              className="w-6 h-6 rounded bg-slate-200"
-              onClick={() => setShowQR(false)}
-              title="Fermer"
-            >
-              ×
-            </button>
-          </div>
-          <div className="p-3">
-            <div className="w-full flex justify-center">
-              <QRCodeGenerator url={participantUrl} />
-            </div>
-            <div className="text-center text-xs mt-2">Participants</div>
-            <div className="mt-3 text-[11px] break-all text-slate-600">
-              {participantUrl}
-            </div>
-            <button
-              className="mt-2 w-full px-3 py-2 rounded bg-slate-200 text-slate-800 text-sm font-semibold"
-              onClick={() => {
-                navigator.clipboard.writeText(participantUrl);
-              }}
-            >
-              Copier le lien
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Éditeur d'analyse (modifiable) */}
+      <div>
+        <label className="block text-sm font-bold mb-1">Synthèse IA (éditable)</label>
+        <textarea
+          rows={18}
+          value={analysisText}
+          onChange={(e) => setAnalysisText(e.target.value)}
+          className="w-full p-3 border-2 border-gray-300 rounded-lg font-mono text-sm"
+          placeholder="La synthèse apparaîtra ici…"
+        />
+      </div>
 
-      {/* ======= Drawer Analyse (optionnel) ======= */}
-      {showAnalysis && (
-        <div className="fixed top-[56px] right-3 z-50 w-[380px] max-h-[calc(100vh-64px)] overflow-auto bg-white rounded shadow-lg border">
-          <div className="p-3 border-b flex items-center justify-between">
-            <div className="font-semibold">Analyse</div>
-            <button
-              className="w-6 h-6 rounded bg-slate-200"
-              onClick={() => setShowAnalysis(false)}
-              title="Fermer"
-            >
-              ×
-            </button>
-          </div>
-          <div className="p-3">
-            {/* On passe bien les données ici aussi */}
-            <AnalysisPanel sessionId={sessionId} postIts={postIts} connections={connections} />
-          </div>
-        </div>
-      )}
-
-      {/* ======= Modale Édition ======= */}
-      {editingId && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
-          <div className="bg-white rounded-xl shadow-xl w-[420px] p-4">
-            <div className="font-bold mb-2">Modifier le post-it</div>
-            <textarea
-              rows={4}
-              value={editingText}
-              onChange={(e) =>
-                setEditingText(e.target.value.slice(0, MAX_CHARS))
-              }
-              className="w-full p-3 border-2 border-gray-300 rounded-lg font-extrabold"
-              placeholder="Contenu…"
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                  e.preventDefault();
-                  saveEditing();
-                }
-              }}
-            />
-            <div className="flex items-center justify-between mt-1 text-xs text-gray-500">
-              <span>{MAX_CHARS - (editingText?.length || 0)} car. restants</span>
-              <span>Ctrl/⌘ + Entrée pour enregistrer</span>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 mt-3">
-              <button
-                className="px-3 py-1 rounded bg-slate-200 text-slate-800"
-                onClick={cancelEditing}
-              >
-                Annuler
-              </button>
-              <button
-                className="px-3 py-1 rounded bg-indigo-600 text-white font-semibold"
-                onClick={saveEditing}
-              >
-                Enregistrer
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Préparation futur “arbre de décision” */}
+      <div className="text-xs text-slate-500">
+        À venir : génération d’un <strong>arbre de décision</strong> à partir des chaînes cause → conséquence,
+        avec critères personnalisés (pondération, probabilité, impact, faisabilité, etc.).
+      </div>
     </div>
+  );
+}
+
+/* ====== Petits composants ====== */
+
+function Badge({ children, titre, color }) {
+  const bg =
+    color === "pink" ? "bg-pink-100 text-pink-800 border-pink-300"
+    : color === "green" ? "bg-green-100 text-green-800 border-green-300"
+    : "bg-slate-100 text-slate-800 border-slate-300";
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-1 rounded border text-xs ${bg}`}>
+      {titre ? <strong>{titre}:</strong> : null} {children}
+    </span>
   );
 }
