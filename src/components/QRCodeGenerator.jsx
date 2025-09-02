@@ -2,12 +2,12 @@ import React, { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 /**
- * QR fiable (canvas) — aucun texte ne s'imprime sur le QR.
- * Le lien est affiché *sous* le QR (jamais par-dessus).
+ * Génère un QR en <canvas> (sans aucun texte par-dessus).
+ * Le lien est affiché *sous* le QR (jamais surimprimé).
  */
 export default function QRCodeGenerator({
   url,
-  size = 180,
+  size = 120,          // plus petit par défaut
   title = "QR participants",
   className = "",
   showLink = true,
@@ -25,7 +25,7 @@ export default function QRCodeGenerator({
 
       const opts = {
         errorCorrectionLevel: "M",
-        margin: 2,
+        margin: 1,
         scale: 8,
         color: { dark: "#000000", light: "#ffffff" },
       };
@@ -83,15 +83,15 @@ export default function QRCodeGenerator({
       </div>
 
       <div
-        className="bg-white border rounded p-3 flex items-center justify-center"
-        style={{ width: size + 20, height: size + 20 }}
+        className="bg-white border rounded p-2 flex items-center justify-center"
+        style={{ width: size + 16, height: size + 16 }}
       >
         {error ? (
           <div className="text-xs text-red-600 text-center leading-snug">
             {error}
             <br />
             <span className="text-[11px] text-gray-600">
-              (Vous pouvez toujours utiliser “Copier le lien”.)
+              (Utilisez “Copier le lien”.)
             </span>
           </div>
         ) : (

@@ -33,7 +33,7 @@ const POSTIT_W = 220;
 const POSTIT_H = 90;
 const MAX_CHARS = 50;
 
-/* Couleurs (fond & bord). Le texte est forcé en noir pour la lisibilité. */
+/* Fond & bord — texte forcé en NOIR pour lisibilité */
 const COLOR_PALETTE = {
   red:   { bg: "#ef4444", border: "#991b1b" },
   pink:  { bg: "#fb7185", border: "#be123c" },
@@ -312,12 +312,6 @@ export default function App() {
   const deletePostItFromFirebase = async (id) => {
     try {
       await deleteDoc(doc(db, "postits", id));
-      const rel = connections.filter(
-        (c) => c.fromId === id || c.toId === id
-      );
-      await Promise.all(
-        rel.map((c) => deleteDoc(doc(db, "connections", c.id)))
-      );
     } catch (e) {
       console.error(e);
     }
@@ -599,7 +593,7 @@ export default function App() {
             : "Glissez pour déplacer"
         }
       >
-        {/* + discrets haut/bas —— petits ronds noirs posés SUR le post-it */}
+        {/* + discrets haut/bas — petits ronds noirs SUR le post-it */}
         {mode === "moderator" && !isConnecting && (
           <>
             <button
@@ -630,15 +624,19 @@ export default function App() {
         )}
 
         <div
-          className="rounded-lg p-3 shadow-lg border-2 relative"
+          className="rounded-lg p-3 shadow-lg border-2 relative group"
           style={{
             backgroundColor: color.bg,
             borderColor: color.border,
+            // Lisibilité
+            color: "#111827",
             fontFamily: "'Arial Black', Arial, sans-serif",
             lineHeight: 1.2,
-            color: "#111827", // texte noir
+            WebkitFontSmoothing: "antialiased",
+            textRendering: "optimizeLegibility",
           }}
         >
+          {/* Actions coin */}
           {mode === "moderator" && !isConnecting && !paintMode && (
             <div className="absolute -top-1 -right-1 flex gap-1">
               <button
@@ -683,10 +681,15 @@ export default function App() {
             </div>
           )}
 
-          <div className="font-extrabold text-[15px] break-words whitespace-normal max-h-[54px] overflow-hidden pr-6">
+          {/* Texte principal */}
+          <div className="font-extrabold text-[16px] break-words whitespace-normal max-h-[54px] overflow-hidden pr-6">
             {p.content}
           </div>
-          <div className="text-[11px] opacity-90 mt-1">{p.author}</div>
+
+          {/* Auteur : masqué par défaut, visible au survol ; n’apparaît pas en PDF */}
+          <div className="absolute left-2 bottom-1 text-[11px] text-black/80 bg-white/85 rounded px-1 leading-4 border border-black/10 opacity-0 group-hover:opacity-100 pointer-events-none">
+            {p.author}
+          </div>
         </div>
       </div>
     );
@@ -868,21 +871,33 @@ export default function App() {
     setZoom(factor || 1);
   };
 
+  /* >>> Export PDF : capture nette (zoom neutralisé + scale 3) */
   const exportTreeAsPDF = async () => {
     const node = treeAreaRef.current;
     if (!node) return;
-    const canvas = await html2canvas(node, { scale: 2, backgroundColor: "#ffffff" });
-    const imgData = canvas.toDataURL("image/png");
-    const pdf = new jsPDF("l", "mm", "a4");
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const ratio = Math.min(pageWidth / canvas.width, pageHeight / canvas.height);
-    const w = canvas.width * ratio;
-    const h = canvas.height * ratio;
-    const x = (pageWidth - w) / 2;
-    const y = (pageHeight - h) / 2;
-    pdf.addImage(imgData, "PNG", x, y, w, h);
-    pdf.save(`arbre-${sessionId}.pdf`);
+    const prevTransform = node.style.transform;
+    try {
+      node.style.transform = "scale(1)"; // neutraliser le zoom pour la capture
+      const canvas = await html2canvas(node, {
+        scale: 3,
+        backgroundColor: "#ffffff",
+        letterRendering: true,
+        useCORS: true,
+      });
+      const imgData = canvas.toDataURL("image/png");
+      const pdf = new jsPDF("l", "mm", "a4");
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const ratio = Math.min(pageWidth / canvas.width, pageHeight / canvas.height);
+      const w = canvas.width * ratio;
+      const h = canvas.height * ratio;
+      const x = (pageWidth - w) / 2;
+      const y = (pageHeight - h) / 2;
+      pdf.addImage(imgData, "PNG", x, y, w, h);
+      pdf.save(`arbre-${sessionId}.pdf`);
+    } finally {
+      node.style.transform = prevTransform || "";
+    }
   };
 
   const visiblePostIts = {
@@ -932,17 +947,24 @@ export default function App() {
               color: "#111827",
               borderColor: color.border,
               fontFamily: "'Arial Black', Arial, sans-serif",
+              WebkitFontSmoothing: "antialiased",
+              textRendering: "optimizeLegibility",
             }}
             onMouseDown={(e) => handleMouseDown(e, p.id)}
             title={paintMode ? "Cliquez pour appliquer la couleur" : `Glissez vers l'arbre (${title})`}
           >
-            <div className="font-extrabold text-sm">
+            <div className="font-extrabold text-sm break-words">
               {p.content}
             </div>
-            <div className="text-[11px] opacity-90">{p.author}</div>
+
+            {/* Auteur masqué par défaut */}
+            <div className="absolute left-2 bottom-1 text-[11px] text-black/80 bg-white/85 rounded px-1 leading-4 border border-black/10 opacity-0 group-hover:opacity-100 pointer-events-none">
+              {p.author}
+            </div>
+
             {!isConnecting && !paintMode && (
               <button
-                className="absolute -top-1 -right-1 w-5 h-5 bg-black/80 text-white rounded-full text-[12px] opacity-0 group-hover:opacity-100"
+                className="absolute -top-1 -right-1 w-5 h-5 bg.black/80 bg-black/80 text-white rounded-full text-[12px] opacity-0 group-hover:opacity-100"
                 onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
                 onClick={(ev) => {
                   ev.stopPropagation();
@@ -1301,8 +1323,8 @@ export default function App() {
           </div>
           <div className="p-3">
             <div className="w-full flex justify-center">
-              {/* lien affiché dessous, jamais surimprimé sur le QR */}
-              <QRCodeGenerator url={participantUrl} showLink={true} />
+              {/* lien affiché dessous, jamais surimprimé ; taille réduite */}
+              <QRCodeGenerator url={participantUrl} showLink={true} size={120} />
             </div>
           </div>
         </div>
