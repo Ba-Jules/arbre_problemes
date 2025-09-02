@@ -93,7 +93,6 @@ export default function App() {
   const [theme, setTheme] = useState("");
 
   const [showQR, setShowQR] = useState(false);
-  const [showAnalysis, setShowAnalysis] = useState(false);
 
   const [showPresentation, setShowPresentation] = useState(false);
 
@@ -110,6 +109,7 @@ export default function App() {
   /* -------- Layout “Focus” -------- */
   const [layoutMode, setLayoutMode] = useState("classic"); // 'classic' | 'focus'
   const [dockPosition, setDockPosition] = useState("right"); // 'right' | 'bottom'
+  const [dockHidden, setDockHidden] = useState(false); // nouveau
 
   /* -------- Analyse autonome (via URL) -------- */
   const [standaloneAnalysis, setStandaloneAnalysis] = useState(false);
@@ -173,7 +173,6 @@ export default function App() {
     setConnections([]);
     setProjectName("");
     setTheme("");
-    setShowAnalysis(false);
     setShowQR(false);
     setIsConnecting(false);
     setConnectSourceId(null);
@@ -542,6 +541,7 @@ export default function App() {
         <div className="flex items-center gap-2">
           {st !== "minimized" && onAdd && (
             <button
+              onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
               onClick={onAdd}
               className="w-6 h-6 rounded bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700"
               title="Ajouter un post-it"
@@ -605,32 +605,34 @@ export default function App() {
             : "Glissez pour déplacer"
         }
       >
-        {/* Boutons + haut/bas */}
+        {/* Rail d’actions (↑+ / ↓+) */}
         {mode === "moderator" && !isConnecting && (
-          <>
+          <div className="absolute -left-8 top-1/2 -translate-y-1/2 flex flex-col gap-2 pointer-events-auto">
             <button
               type="button"
-              className="absolute left-1/2 -translate-x-1/2 -top-3 w-6 h-6 rounded-full bg-emerald-600 text-white text-[14px] leading-[22px] shadow"
-              title="Ajouter & relier (au-dessus)"
+              className="w-8 h-8 rounded-xl bg-emerald-600 text-white text-[14px] shadow border border-emerald-700 flex items-center justify-center"
+              title="Ajouter & relier au-dessus"
+              onMouseDown={(ev)=>{ev.preventDefault();ev.stopPropagation();}}
               onClick={(ev) => {
                 ev.stopPropagation();
                 createLinkedPostIt(p, "up");
               }}
             >
-              +
+              ↑+
             </button>
             <button
               type="button"
-              className="absolute left-1/2 -translate-x-1/2 -bottom-3 w-6 h-6 rounded-full bg-emerald-600 text-white text-[14px] leading-[22px] shadow"
-              title="Ajouter & relier (au-dessous)"
+              className="w-8 h-8 rounded-xl bg-emerald-600 text-white text-[14px] shadow border border-emerald-700 flex items-center justify-center"
+              title="Ajouter & relier au-dessous"
+              onMouseDown={(ev)=>{ev.preventDefault();ev.stopPropagation();}}
               onClick={(ev) => {
                 ev.stopPropagation();
                 createLinkedPostIt(p, "down");
               }}
             >
-              +
+              ↓+
             </button>
-          </>
+          </div>
         )}
 
         <div
@@ -649,6 +651,7 @@ export default function App() {
                 type="button"
                 className="w-5 h-5 bg-black/70 text-white rounded-full text-[11px] flex items-center justify-center"
                 title="Modifier"
+                onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
                 onClick={(ev) => {
                   ev.stopPropagation();
                   startEditing(p);
@@ -660,6 +663,7 @@ export default function App() {
                 type="button"
                 className="w-5 h-5 bg-black/70 text-white rounded-full text-[13px] flex items-center justify-center"
                 title="Couleur"
+                onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
                 onClick={(ev) => {
                   ev.stopPropagation();
                   const keys = Object.keys(COLOR_PALETTE);
@@ -674,6 +678,7 @@ export default function App() {
                 type="button"
                 className="w-5 h-5 bg-black/70 text-white rounded-full text-[13px] flex items-center justify-center"
                 title="Supprimer"
+                onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
                 onClick={(ev) => {
                   ev.stopPropagation();
                   deletePostItFromFirebase(p.id);
@@ -927,6 +932,7 @@ export default function App() {
             {!isConnecting && !paintMode && (
               <button
                 className="absolute -top-1 -right-1 w-5 h-5 bg-black/70 text-white rounded-full text-[12px] opacity-0 group-hover:opacity-100"
+                onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
                 onClick={(ev) => {
                   ev.stopPropagation();
                   deletePostItFromFirebase(p.id);
@@ -1090,6 +1096,7 @@ export default function App() {
         </div>
       </div>
 
+      {/* Contrôles zoom + dock */}
       <div className="absolute top-3 left-3 z-40 flex items-center gap-2 bg-white/90 backdrop-blur rounded shadow p-2">
         <button className="px-2 py-1 rounded bg-slate-200" onClick={zoomOut} title="Dézoomer">–</button>
         <span className="min-w-[44px] text-center font-semibold">{Math.round(zoom * 100)}%</span>
@@ -1097,7 +1104,7 @@ export default function App() {
         <button className="px-2 py-1 rounded bg-slate-200" onClick={zoomFit} title="Ajuster">Ajuster</button>
       </div>
 
-      {dockPosition === "right" ? (
+      {!dockHidden && (dockPosition === "right" ? (
         <div className="absolute right-2 top-16 bottom-2 w-72 bg-white/95 backdrop-blur border rounded-lg shadow p-2 overflow-y-auto z-30">
           <div className="text-sm font-bold mb-2">📥 Zones de collecte</div>
           <div className="space-y-4">
@@ -1139,7 +1146,7 @@ export default function App() {
             </DockSection>
           </div>
         </div>
-      )}
+      ))}
     </div>
   );
 
@@ -1148,7 +1155,9 @@ export default function App() {
       <div>
         <div className="flex items-center justify-between mb-1">
           <div className="font-semibold">{title}</div>
-          <button className="px-2 py-0.5 rounded bg-indigo-600 text-white text-xs" onClick={add}>+</button>
+          <button className="px-2 py-0.5 rounded bg-indigo-600 text-white text-xs"
+            onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
+            onClick={add}>+</button>
         </div>
         {children}
       </div>
@@ -1238,13 +1247,22 @@ export default function App() {
             </button>
 
             {layoutMode === "focus" && (
-              <button
-                className="px-3 py-1 rounded text-sm font-semibold bg-slate-200 text-slate-700"
-                onClick={() => setDockPosition((d) => (d === "right" ? "bottom" : "right"))}
-                title="Position du dock (côté/bas)"
-              >
-                Dock: {dockPosition === "right" ? "côté" : "bas"}
-              </button>
+              <>
+                <button
+                  className="px-3 py-1 rounded text-sm font-semibold bg-slate-200 text-slate-700"
+                  onClick={() => setDockPosition((d) => (d === "right" ? "bottom" : "right"))}
+                  title="Position du dock (côté/bas)"
+                >
+                  Dock: {dockPosition === "right" ? "côté" : "bas"}
+                </button>
+                <button
+                  className="px-3 py-1 rounded text-sm font-semibold bg-slate-200 text-slate-700"
+                  onClick={() => setDockHidden((h) => !h)}
+                  title="Masquer/Afficher le dock"
+                >
+                  {dockHidden ? "Afficher dock" : "Masquer dock"}
+                </button>
+              </>
             )}
 
             <button
@@ -1289,7 +1307,7 @@ export default function App() {
           </div>
           <div className="p-3">
             <div className="w-full flex justify-center">
-              <QRCodeGenerator url={participantUrl} />
+              <QRCodeGenerator url={participantUrl} showLink={false} />
             </div>
             <div className="text-center text-xs mt-2">Participants</div>
             <div className="mt-3 text-[11px] break-all text-slate-600">{participantUrl}</div>
@@ -1299,24 +1317,6 @@ export default function App() {
             >
               Copier le lien
             </button>
-          </div>
-        </div>
-      )}
-
-      {showAnalysis && (
-        <div className="fixed top-[56px] right-3 z-50 w-[380px] max-h-[calc(100vh-64px)] overflow-auto bg-white rounded shadow-lg border">
-          <div className="p-3 border-b flex items-center justify-between">
-            <div className="font-semibold">Analyse</div>
-            <button className="w-6 h-6 rounded bg-slate-200" onClick={() => setShowAnalysis(false)} title="Fermer">×</button>
-          </div>
-          <div className="p-3">
-            <AnalysisPanel
-              sessionId={sessionId}
-              postIts={postIts}
-              connections={connections}
-              projectName={projectName}
-              theme={theme}
-            />
           </div>
         </div>
       )}

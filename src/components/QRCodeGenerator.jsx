@@ -6,13 +6,14 @@ import QRCode from "qrcode";
  * - re-rendu si l’URL change
  * - bouton Télécharger (PNG)
  * - bouton Copier le lien
- * - fallback texte si le canvas n’est pas supporté
+ * - lien affiché optionnel sous le QR (showLink)
  */
 export default function QRCodeGenerator({
   url,
   size = 180,
   title = "QR participants",
   className = "",
+  showLink = true,
 }) {
   const canvasRef = useRef(null);
   const [error, setError] = useState(null);
@@ -25,7 +26,6 @@ export default function QRCodeGenerator({
       const canvas = canvasRef.current;
       if (!canvas) return;
 
-      // Quelques options utiles pour une meilleure lisibilité
       const opts = {
         errorCorrectionLevel: "M",
         margin: 2,
@@ -113,9 +113,11 @@ export default function QRCodeGenerator({
         )}
       </div>
 
-      <div className="mt-2 text-[11px] break-all leading-snug">
-        {url || ""}
-      </div>
+      {showLink && (
+        <div className="mt-2 text-[11px] break-all leading-snug">
+          {url || ""}
+        </div>
+      )}
     </div>
   );
 }

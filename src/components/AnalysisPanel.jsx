@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   LineChart, Line, CartesianGrid, PieChart, Pie, Cell, Legend
@@ -13,17 +13,17 @@ const COLORS = {
 };
 const PIE_COLORS = ["#22c55e", "#ef4444", "#fb7185", "#3b82f6", "#f59e0b", "#a855f7"];
 
-export default function AnalysisPanel({ sessionId, postIts = [], connections = [] }) {
+export default function AnalysisPanel({ sessionId, projectName, theme, postIts = [], connections = [] }) {
   const exportRef = useRef(null);
 
-  // Nettoyage / jeux de données
+  // Nettoyages / datasets de base
   const byCategory = useMemo(() => {
     const counts = { problem: 0, causes: 0, consequences: 0 };
     postIts.forEach(p => { if (counts[p.category] != null) counts[p.category]++; });
     return [
-      { name: "Problèmes", value: counts.problem, color: COLORS.problem },
-      { name: "Causes", value: counts.causes, color: COLORS.causes },
-      { name: "Conséquences", value: counts.consequences, color: COLORS.consequences },
+      { name: "Problèmes", key: "problem", value: counts.problem, color: COLORS.problem },
+      { name: "Causes", key: "causes", value: counts.causes, color: COLORS.causes },
+      { name: "Conséquences", key: "consequences", value: counts.consequences, color: COLORS.consequences },
     ];
   }, [postIts]);
 
@@ -40,10 +40,10 @@ export default function AnalysisPanel({ sessionId, postIts = [], connections = [
   }, [postIts]);
 
   const timeline = useMemo(() => {
-    // bucket par date HH:mm
     const m = new Map();
     postIts.forEach(p => {
-      const t = p.timestamp?.toDate ? p.timestamp.toDate() : (p.timestamp?._seconds ? new Date(p.timestamp._seconds * 1000) : null);
+      const t = p.timestamp?.toDate ? p.timestamp.toDate()
+        : (p.timestamp?._seconds ? new Date(p.timestamp._seconds * 1000) : null);
       if (!t) return;
       const key = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,"0")}-${String(t.getDate()).padStart(2,"0")} ${String(t.getHours()).padStart(2,"0")}:${String(t.getMinutes()).padStart(2,"0")}`;
       m.set(key, (m.get(key) || 0) + 1);
@@ -53,25 +53,225 @@ export default function AnalysisPanel({ sessionId, postIts = [], connections = [
       .map(([time, value]) => ({ time, value }));
   }, [postIts]);
 
+  // Indexation rapide
+  const byId = useMemo(() => Object.fromEntries(postIts.map(p => [p.id, p])), [postIts]);
+
+  // Degrés entrants/sortants
+  const degrees = useMemo(() => {
+    const inDeg = new Map(), outDeg = new Map();
+    postIts.forEach(p => { inDeg.set(p.id, 0); outDeg.set(p.id, 0); });
+    connections.forEach(c => {
+      if (!byId[c.fromId] || !byId[c.toId]) return;
+      outDeg.set(c.fromId, (outDeg.get(c.fromId) || 0) + 1);
+      inDeg.set(c.toId, (inDeg.get(c.toId) || 0) + 1);
+    });
+    return { inDeg, outDeg };
+  }, [postIts, connections, byId]);
+
+  // Racines (in=0), feuilles (out=0), hubs (degré total)
+  const roots = useMemo(() =>
+    postIts.filter(p => (degrees.inDeg.get(p.id) || 0) === 0 && (degrees.outDeg.get(p.id) || 0) > 0),
+    [postIts, degrees]
+  );
+  const leaves = useMemo(() =>
+    postIts.filter(p => (degrees.outDeg.get(p.id) || 0) === 0 && (degrees.inDeg.get(p.id) || 0) > 0),
+    [postIts, degrees]
+  );
+  const hubs = useMemo(() =>
+    [...postIts]
+      .map(p => ({ p, d: (degrees.inDeg.get(p.id) || 0) + (degrees.outDeg.get(p.id) || 0) }))
+      .sort((a,b) => b.d - a.d)
+      .slice(0, 5),
+    [postIts, degrees]
+  );
+  const isolated = useMemo(() =>
+    postIts.filter(p => (degrees.inDeg.get(p.id) || 0) === 0 && (degrees.outDeg.get(p.id) || 0) === 0),
+    [postIts, degrees]
+  );
+
+  // Détection cycles simples (approximative)
+  const hasCycle = useMemo(() => {
+    const visited = new Set();
+    const stack = new Set();
+    const adj = new Map();
+    connections.forEach(c => {
+      if (!adj.has(c.fromId)) adj.set(c.fromId, []);
+      adj.get(c.fromId).push(c.toId);
+    });
+    const dfs = (u) => {
+      if (stack.has(u)) return true;
+      if (visited.has(u)) return false;
+      visited.add(u);
+      stack.add(u);
+      for (const v of (adj.get(u) || [])) {
+        if (dfs(v)) return true;
+      }
+      stack.delete(u);
+      return false;
+    };
+    for (const p of postIts) if (dfs(p.id)) return true;
+    return false;
+  }, [postIts, connections]);
+
+  // Chaînes cause -> … -> conséquence (petit échantillon priorisé)
+  const chains = useMemo(() => {
+    const adj = new Map();
+    connections.forEach(c => {
+      if (!byId[c.fromId] || !byId[c.toId]) return;
+      if (!adj.has(c.fromId)) adj.set(c.fromId, []);
+      adj.get(c.fromId).push(c.toId);
+    });
+
+    const maxDepth = 6;
+    const keep = [];
+    const visitedPath = new Set();
+
+    const dfs = (nodeId, path) => {
+      if (path.length > maxDepth) return;
+      const node = byId[nodeId];
+      if (!node) return;
+      const newPath = [...path, nodeId];
+      // si commence par cause et finit par conséquence -> garder
+      if (newPath.length >= 2) {
+        const first = byId[newPath[0]];
+        const last = byId[newPath[newPath.length - 1]];
+        if (first?.category === "causes" && last?.category === "consequences") {
+          const key = newPath.join(">");
+          if (!visitedPath.has(key)) {
+            visitedPath.add(key);
+            keep.push(newPath);
+          }
+        }
+      }
+      for (const nx of (adj.get(nodeId) || [])) {
+        dfs(nx, newPath);
+      }
+    };
+
+    postIts
+      .filter(p => p.category === "causes")
+      .forEach(c => dfs(c.id, []));
+
+    // score simple: longueur + nb transitions inter-catégories
+    const score = (path) => {
+      let s = path.length;
+      for (let i=1;i<path.length;i++) {
+        if (byId[path[i-1]]?.category !== byId[path[i]]?.category) s += 0.5;
+      }
+      return s;
+    };
+
+    return keep
+      .sort((a,b) => score(b) - score(a))
+      .slice(0, 8)
+      .map(ids => ids.map(id => byId[id]?.content || "•").join(" → "));
+  }, [byId, postIts, connections]);
+
   const insights = useMemo(() => {
     const total = postIts.length;
     const nbLinks = connections.length;
     const maxAuthor = byAuthor[0]?.author || "—";
     const maxAuthorCount = byAuthor[0]?.value || 0;
-
     const topCategory = [...byCategory].sort((a,b) => b.value - a.value)[0];
+
+    const density = total > 1 ? (nbLinks / (total * (total - 1))).toFixed(3) : "0.000";
+
     return [
       `Total de contributions : ${total}`,
-      `Connexions (liens) dans l’arbre : ${nbLinks}`,
+      `Connexions (liens) : ${nbLinks} — Densité approx. du graphe : ${density}`,
       `Catégorie la plus fournie : ${topCategory?.name || "—"} (${topCategory?.value || 0})`,
       `Participant le plus actif : ${maxAuthor} (${maxAuthorCount} post-its)`,
+      `Hubs : ${hubs.map(h => (byId[h.p.id]?.content || "•")).slice(0,3).join(" | ") || "—"}`,
+      `Racines (entrées majeures) : ${roots.slice(0,3).map(r => r.content).join(" | ") || "—"}`,
+      `Feuilles (sorties majeures) : ${leaves.slice(0,3).map(f => f.content).join(" | ") || "—"}`,
+      `Étiquettes isolées : ${isolated.length}`,
+      `Cycles détectés : ${hasCycle ? "oui (à investiguer)" : "non"}`,
     ];
-  }, [postIts, connections, byAuthor, byCategory]);
+  }, [postIts, connections, byAuthor, byCategory, hubs, roots, leaves, isolated, hasCycle, byId]);
+
+  // ---------- Synthèse IA (éditable) ----------
+  const makeDeepAnalysis = useCallback(() => {
+    const title = `SYNTHÈSE AUTOMATIQUE (éditable)`;
+    const header =
+`${title}
+
+Aperçu global : ${postIts.length} étiquettes, ${connections.length} liaisons.
+Répartition : Problèmes ${byCategory.find(c=>c.key==="problem")?.value||0}, Causes ${byCategory.find(c=>c.key==="causes")?.value||0}, Conséquences ${byCategory.find(c=>c.key==="consequences")?.value||0}.
+Hubs : ${hubs.map(h => (byId[h.p.id]?.content || "•") + ` (${(degrees.inDeg.get(h.p.id)||0)+(degrees.outDeg.get(h.p.id)||0)})`).join(" ; ") || "—"}.
+Racines (sans parents) : ${roots.slice(0,5).map(r=>r.content).join(" ; ") || "—"}.
+Feuilles (sans enfants) : ${leaves.slice(0,5).map(f=>f.content).join(" ; ") || "—"}.
+Isolées : ${isolated.length}. Cycles : ${hasCycle ? "oui" : "non"}.
+`;
+
+    const chainBlock = chains.length
+      ? `Chaînes cause → … → conséquence (échantillon priorisé) :
+- ${chains.join("\n- ")}`
+      : `Chaînes cause → … → conséquence : non détectées (ou non reliées).`;
+
+    const quality =
+`Qualité & cohérence :
+- Doublons potentiels : à vérifier (étiquettes proches sémantiquement ou libellés similaires).
+- Normalisation : harmoniser la casse, éviter les phrases trop longues (> ${50} car.).
+- Structure : privilégier des liens cause→problème→conséquence ; limiter les croisements inutiles.
+- Gouvernance : nommer un modérateur couleur (🎨) pour uniformiser les codes visuels.`;
+
+    const recommandations =
+`Recommandations opérationnelles :
+1) Regrouper les causes proches en 3–5 familles (thématisation).
+2) Valider le(s) problème(s) central(aux) — s’il y en a trop, en faire des sous-arbres.
+3) Prioriser les conséquences selon l’impact/urgence (High/Medium/Low) et la probabilité.
+4) Construire un plan d’action :
+   • Actions “Quick wins” (fort impact, faisable court terme)
+   • Actions “Structurantes” (moyen/long terme, besoins ressources)
+   • Actions “Exploration” (incertitudes à lever)
+5) Préparer l’export et l’atelier décisionnel.`;
+
+    const decisionPrep =
+`Pistes pour l’arbre de décision (à venir) :
+- Critères : impact, probabilité, faisabilité, coût, délai, risques, sponsors.
+- Pondération suggérée : Impact (40%), Faisabilité (30%), Probabilité (20%), Risques négatifs (10%).
+- Sortie attendue : portefeuille d’actions priorisé + road-map 30/60/90 jours.`;
+
+    const ctx = (projectName || theme)
+      ? `Contexte : ${[projectName, theme].filter(Boolean).join(" — ")}.`
+      : `Contexte : (à compléter — nom du projet / thème).`;
+
+    return [
+      ctx,
+      header,
+      chainBlock,
+      quality,
+      recommandations,
+      decisionPrep
+    ].join("\n\n");
+  }, [
+    postIts, connections, byCategory, hubs, byId, degrees, roots, leaves,
+    isolated, hasCycle, chains, projectName, theme
+  ]);
+
+  const [analysisText, setAnalysisText] = useState(makeDeepAnalysis());
+
+  useEffect(() => {
+    // régénère automatiquement quand l’arbre change (mais laisse l’édition possible)
+    setAnalysisText(makeDeepAnalysis());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [postIts, connections]);
+
+  const handleRegenerate = () => setAnalysisText(makeDeepAnalysis());
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(analysisText || "");
+      alert("Synthèse copiée ✅");
+    } catch {
+      prompt("Copiez la synthèse :", analysisText || "");
+    }
+  };
 
   const handleExportPdf = async () => {
+    // html2canvas ne capture pas le contenu des <textarea>, d’où l’usage d’un bloc contentEditable
     const node = exportRef.current;
     if (!node) return;
-
     const canvas = await html2canvas(node, { scale: 2, backgroundColor: "#ffffff" });
     const imgData = canvas.toDataURL("image/png");
     const pdf = new jsPDF("p", "mm", "a4");
@@ -91,14 +291,29 @@ export default function AnalysisPanel({ sessionId, postIts = [], connections = [
 
   return (
     <div className="w-full h-full overflow-auto">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center gap-2 flex-wrap justify-between mb-3">
         <h2 className="text-xl font-black">Analyse de la session</h2>
-        <button
-          onClick={handleExportPdf}
-          className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold"
-        >
-          Exporter en PDF
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleRegenerate}
+            className="px-3 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded font-semibold"
+            title="Régénérer la synthèse à partir de l’arbre"
+          >
+            Régénérer la synthèse
+          </button>
+          <button
+            onClick={handleCopy}
+            className="px-3 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded font-semibold"
+          >
+            Copier le texte
+          </button>
+          <button
+            onClick={handleExportPdf}
+            className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold"
+          >
+            Télécharger en PDF
+          </button>
+        </div>
       </div>
 
       <div ref={exportRef} className="space-y-12">
@@ -184,6 +399,23 @@ export default function AnalysisPanel({ sessionId, postIts = [], connections = [
           <ul className="bg-white rounded-lg shadow border p-4 list-disc pl-6 space-y-1">
             {insights.map((t, i) => <li key={i}>{t}</li>)}
           </ul>
+        </section>
+
+        {/* 5. Synthèse IA éditable */}
+        <section>
+          <h3 className="font-bold mb-2">Synthèse IA (éditable)</h3>
+          <div
+            contentEditable
+            suppressContentEditableWarning
+            className="min-h-[280px] w-full bg-white rounded-lg shadow border p-4 font-mono text-[13px] whitespace-pre-wrap focus:outline-none"
+            onInput={(e)=> setAnalysisText(e.currentTarget.innerText)}
+          >
+            {analysisText}
+          </div>
+          <p className="text-[11px] text-slate-500 mt-1">
+            Astuce : éditez directement le texte ci-dessus. Le bouton “Régénérer” remplace le contenu par une nouvelle
+            analyse basée sur l’arbre actuel (vos modifications locales seront perdues).
+          </p>
         </section>
       </div>
     </div>
