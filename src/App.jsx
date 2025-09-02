@@ -25,6 +25,7 @@ import { db } from "./firebase-config";
 import QRCodeGenerator from "./components/QRCodeGenerator.jsx";
 import ColorPalette from "./components/ColorPalette.jsx";
 import AnalysisPanel from "./components/AnalysisPanel.jsx";
+import ArbreProblemePresentation from "./components/ArbreProblemePresentation.jsx";
 
 /* ========================= Constantes UI ========================= */
 
@@ -84,6 +85,9 @@ export default function App() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectSourceId, setConnectSourceId] = useState(null);
 
+  // Mode Peindre (appliquer couleur active sur clic)
+  const [paintMode, setPaintMode] = useState(false);
+
   // Drag & drop
   const [selectedPostIt, setSelectedPostIt] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -103,6 +107,9 @@ export default function App() {
   // Panneaux latéraux
   const [showQR, setShowQR] = useState(false);
   const [showAnalysis, setShowAnalysis] = useState(false);
+
+  // Présentation (écran d’accueil)
+  const [showPresentation, setShowPresentation] = useState(false);
 
   /* -------- Participant -------- */
   const [participantName, setParticipantName] = useState(
@@ -148,6 +155,10 @@ export default function App() {
     setTheme("");
     setShowAnalysis(false);
     setShowQR(false);
+    setIsConnecting(false);
+    setConnectSourceId(null);
+    setPaintMode(false);
+    setShowPresentation(true); // afficher la présentation au début d'une nouvelle session
 
     try {
       await setDoc(
@@ -181,10 +192,16 @@ export default function App() {
           const data = snap.data();
           setProjectName(data.projectName || "");
           setTheme(data.theme || "");
+          // Si aucune méta n'est encore saisie et qu'on est côté modérateur, montrer la présentation
+          if (mode !== "participant" && !(data.projectName || data.theme)) {
+            setShowPresentation(true);
+          }
+        } else {
+          if (mode !== "participant") setShowPresentation(true);
         }
       })
       .catch(() => {});
-  }, [sessionId]);
+  }, [sessionId, mode]);
 
   /* ========================= Firestore listeners ========================= */
 
@@ -293,11 +310,20 @@ export default function App() {
     }
   };
 
-  /* ========================= Drag & Drop ========================= */
+  /* ========================= Drag & Drop / Click handlers ========================= */
 
   const handleMouseDown = (e, postItId) => {
     if (mode !== "moderator") return;
     e.preventDefault();
+
+    // Mode Peindre : un clic applique la couleur active et s'arrête là
+    if (paintMode) {
+      updatePostItInFirebase(postItId, {
+        color: activeColor,
+        updatedAt: serverTimestamp(),
+      });
+      return;
+    }
 
     if (isConnecting) {
       if (!connectSourceId) {
@@ -449,7 +475,7 @@ export default function App() {
     if (st === "maximized") return "col-span-12 row-span-12 z-40";
     if (st === "minimized") return "col-span-2 row-span-2 min-h-[40px]";
     return base;
-    };
+  };
 
   const PanelHeader = ({ title, panel, onAdd }) => {
     const st = panelStates[panel];
@@ -503,7 +529,7 @@ export default function App() {
       <div
         key={p.id}
         className={`absolute select-none transition-transform ${
-          isConnecting ? "cursor-pointer" : "cursor-move"
+          isConnecting ? "cursor-pointer" : paintMode ? "cursor-crosshair" : "cursor-move"
         } ${isSource ? "ring-4 ring-blue-400" : ""}`}
         style={{
           left: p.x,
@@ -515,7 +541,9 @@ export default function App() {
         }}
         onMouseDown={(e) => handleMouseDown(e, p.id)}
         title={
-          isConnecting
+          paintMode
+            ? "Cliquez pour appliquer la couleur"
+            : isConnecting
             ? connectSourceId
               ? "Cliquez la CIBLE"
               : "Cliquez la SOURCE"
@@ -533,7 +561,7 @@ export default function App() {
           }}
         >
           {/* Actions (crayon / supprimer / couleur) */}
-          {mode === "moderator" && !isConnecting && (
+          {mode === "moderator" && !isConnecting && !paintMode && (
             <div className="absolute -top-1 -right-1 flex gap-1">
               <button
                 type="button"
@@ -759,6 +787,30 @@ export default function App() {
     problems: postIts.filter((p) => p.category === "problem" && !p.isInTree),
   };
 
+  // Gestion "Démarrer l'atelier" depuis l'écran de présentation
+  const handlePresentationComplete = async ({ projectName: p, theme: t }) => {
+    await setDoc(
+      doc(db, "sessions", sessionId),
+      { projectName: p, theme: t, updatedAt: serverTimestamp() },
+      { merge: true }
+    );
+    setProjectName(p || "");
+    setTheme(t || "");
+    setShowPresentation(false);
+  };
+
+  // Écran d'accueil (présentation) si demandé
+  if (showPresentation && mode !== "participant") {
+    return (
+      <ArbreProblemePresentation
+        sessionId={sessionId}
+        onComplete={handlePresentationComplete}
+        defaultProjectName={projectName}
+        defaultTheme={theme}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100">
       {/* ======= Header compact (1 ligne) ======= */}
@@ -823,6 +875,25 @@ export default function App() {
           <div className="flex items-center gap-2">
             <button
               className={`px-3 py-1 rounded text-sm font-semibold ${
+                paintMode
+                  ? "bg-yellow-400 text-black"
+                  : "bg-slate-200 text-slate-700"
+              }`}
+              onClick={() => {
+                setPaintMode((v) => !v);
+                if (!paintMode) {
+                  // désactive l'autre mode pour éviter les conflits
+                  setIsConnecting(false);
+                  setConnectSourceId(null);
+                }
+              }}
+              title="Appliquer la couleur active sur clic de post-it"
+            >
+              Peindre
+            </button>
+
+            <button
+              className={`px-3 py-1 rounded text-sm font-semibold ${
                 isConnecting
                   ? "bg-blue-600 text-white"
                   : "bg-slate-200 text-slate-700"
@@ -830,6 +901,7 @@ export default function App() {
               onClick={() => {
                 setIsConnecting((v) => !v);
                 setConnectSourceId(null);
+                if (!isConnecting) setPaintMode(false); // exclusif avec Peindre
               }}
               title="Relier des post-its"
             >
@@ -902,12 +974,13 @@ export default function App() {
                       fontFamily: "'Arial Black', Arial, sans-serif",
                     }}
                     onMouseDown={(e) => handleMouseDown(e, p.id)}
+                    title={paintMode ? "Cliquez pour appliquer la couleur" : undefined}
                   >
                     <div className="font-extrabold text-sm break-words">
                       {p.content}
                     </div>
                     <div className="text-[11px] opacity-90">{p.author}</div>
-                    {!isConnecting && (
+                    {!isConnecting && !paintMode && (
                       <button
                         className="absolute -top-1 -right-1 w-5 h-5 bg-black/70 text-white rounded-full text-[12px] opacity-0 group-hover:opacity-100"
                         onClick={(ev) => {
@@ -1052,12 +1125,13 @@ export default function App() {
                       fontFamily: "'Arial Black', Arial, sans-serif",
                     }}
                     onMouseDown={(e) => handleMouseDown(e, p.id)}
+                    title={paintMode ? "Cliquez pour appliquer la couleur" : undefined}
                   >
                     <div className="font-extrabold text-sm break-words">
                       {p.content}
                     </div>
                     <div className="text-[11px] opacity-90">{p.author}</div>
-                    {!isConnecting && (
+                    {!isConnecting && !paintMode && (
                       <button
                         className="absolute -top-1 -right-1 w-5 h-5 bg-black/70 text-white rounded-full text-[12px] opacity-0 group-hover:opacity-100"
                         onClick={(ev) => {
@@ -1113,12 +1187,13 @@ export default function App() {
                       fontFamily: "'Arial Black', Arial, sans-serif",
                     }}
                     onMouseDown={(e) => handleMouseDown(e, p.id)}
+                    title={paintMode ? "Cliquez pour appliquer la couleur" : undefined}
                   >
                     <div className="font-extrabold text-sm break-words">
                       {p.content}
                     </div>
                     <div className="text-[11px] opacity-90">{p.author}</div>
-                    {!isConnecting && (
+                    {!isConnecting && !paintMode && (
                       <button
                         className="absolute -top-1 -right-1 w-5 h-5 bg-black/70 text-white rounded-full text-[12px] opacity-0 group-hover:opacity-100"
                         onClick={(ev) => {
@@ -1153,7 +1228,8 @@ export default function App() {
           </div>
           <div className="p-3">
             <div className="w-full flex justify-center">
-              <QRCodeGenerator text={participantUrl} size={180} />
+              {/* Correctif: props du composant QR */}
+              <QRCodeGenerator url={participantUrl} />
             </div>
             <div className="text-center text-xs mt-2">Participants</div>
             <div className="mt-3 text-[11px] break-all text-slate-600">
