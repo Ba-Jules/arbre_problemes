@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   LineChart, Line, CartesianGrid, PieChart, Pie, Cell, Legend
@@ -16,14 +16,13 @@ const PIE_COLORS = ["#22c55e", "#ef4444", "#fb7185", "#3b82f6", "#f59e0b", "#a85
 export default function AnalysisPanel({ sessionId, projectName, theme, postIts = [], connections = [] }) {
   const exportRef = useRef(null);
 
-  // Nettoyages / datasets de base
   const byCategory = useMemo(() => {
     const counts = { problem: 0, causes: 0, consequences: 0 };
     postIts.forEach(p => { if (counts[p.category] != null) counts[p.category]++; });
     return [
       { name: "Problèmes", key: "problem", value: counts.problem, color: COLORS.problem },
       { name: "Causes", key: "causes", value: counts.causes, color: COLORS.causes },
-      { name: "Conséquences", key: "consequences", value: counts.consequences, color: COLORS.consequences },
+      { name: "Conséquences", key: "conséquences", value: counts.consequences, color: COLORS.consequences },
     ];
   }, [postIts]);
 
@@ -53,10 +52,8 @@ export default function AnalysisPanel({ sessionId, projectName, theme, postIts =
       .map(([time, value]) => ({ time, value }));
   }, [postIts]);
 
-  // Indexation rapide
   const byId = useMemo(() => Object.fromEntries(postIts.map(p => [p.id, p])), [postIts]);
 
-  // Degrés entrants/sortants
   const degrees = useMemo(() => {
     const inDeg = new Map(), outDeg = new Map();
     postIts.forEach(p => { inDeg.set(p.id, 0); outDeg.set(p.id, 0); });
@@ -68,7 +65,6 @@ export default function AnalysisPanel({ sessionId, projectName, theme, postIts =
     return { inDeg, outDeg };
   }, [postIts, connections, byId]);
 
-  // Racines (in=0), feuilles (out=0), hubs (degré total)
   const roots = useMemo(() =>
     postIts.filter(p => (degrees.inDeg.get(p.id) || 0) === 0 && (degrees.outDeg.get(p.id) || 0) > 0),
     [postIts, degrees]
@@ -89,7 +85,6 @@ export default function AnalysisPanel({ sessionId, projectName, theme, postIts =
     [postIts, degrees]
   );
 
-  // Détection cycles simples (approximative)
   const hasCycle = useMemo(() => {
     const visited = new Set();
     const stack = new Set();
@@ -113,7 +108,6 @@ export default function AnalysisPanel({ sessionId, projectName, theme, postIts =
     return false;
   }, [postIts, connections]);
 
-  // Chaînes cause -> … -> conséquence (petit échantillon priorisé)
   const chains = useMemo(() => {
     const adj = new Map();
     connections.forEach(c => {
@@ -131,7 +125,6 @@ export default function AnalysisPanel({ sessionId, projectName, theme, postIts =
       const node = byId[nodeId];
       if (!node) return;
       const newPath = [...path, nodeId];
-      // si commence par cause et finit par conséquence -> garder
       if (newPath.length >= 2) {
         const first = byId[newPath[0]];
         const last = byId[newPath[newPath.length - 1]];
@@ -148,11 +141,8 @@ export default function AnalysisPanel({ sessionId, projectName, theme, postIts =
       }
     };
 
-    postIts
-      .filter(p => p.category === "causes")
-      .forEach(c => dfs(c.id, []));
+    postIts.filter(p => p.category === "causes").forEach(c => dfs(c.id, []));
 
-    // score simple: longueur + nb transitions inter-catégories
     const score = (path) => {
       let s = path.length;
       for (let i=1;i<path.length;i++) {
@@ -173,7 +163,6 @@ export default function AnalysisPanel({ sessionId, projectName, theme, postIts =
     const maxAuthor = byAuthor[0]?.author || "—";
     const maxAuthorCount = byAuthor[0]?.value || 0;
     const topCategory = [...byCategory].sort((a,b) => b.value - a.value)[0];
-
     const density = total > 1 ? (nbLinks / (total * (total - 1))).toFixed(3) : "0.000";
 
     return [
@@ -196,7 +185,7 @@ export default function AnalysisPanel({ sessionId, projectName, theme, postIts =
 `${title}
 
 Aperçu global : ${postIts.length} étiquettes, ${connections.length} liaisons.
-Répartition : Problèmes ${byCategory.find(c=>c.key==="problem")?.value||0}, Causes ${byCategory.find(c=>c.key==="causes")?.value||0}, Conséquences ${byCategory.find(c=>c.key==="consequences")?.value||0}.
+Répartition : Problèmes ${byCategory.find(c=>c.key==="problem")?.value||0}, Causes ${byCategory.find(c=>c.key==="causes")?.value||0}, Conséquences ${byCategory.find(c=>c.key==="conséquences")?.value||0}.
 Hubs : ${hubs.map(h => (byId[h.p.id]?.content || "•") + ` (${(degrees.inDeg.get(h.p.id)||0)+(degrees.outDeg.get(h.p.id)||0)})`).join(" ; ") || "—"}.
 Racines (sans parents) : ${roots.slice(0,5).map(r=>r.content).join(" ; ") || "—"}.
 Feuilles (sans enfants) : ${leaves.slice(0,5).map(f=>f.content).join(" ; ") || "—"}.
@@ -247,12 +236,11 @@ Isolées : ${isolated.length}. Cycles : ${hasCycle ? "oui" : "non"}.
   }, [
     postIts, connections, byCategory, hubs, byId, degrees, roots, leaves,
     isolated, hasCycle, chains, projectName, theme
-  ]);
+  ]) ;
 
   const [analysisText, setAnalysisText] = useState(makeDeepAnalysis());
 
   useEffect(() => {
-    // régénère automatiquement quand l’arbre change (mais laisse l’édition possible)
     setAnalysisText(makeDeepAnalysis());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [postIts, connections]);
@@ -269,7 +257,6 @@ Isolées : ${isolated.length}. Cycles : ${hasCycle ? "oui" : "non"}.
   };
 
   const handleExportPdf = async () => {
-    // html2canvas ne capture pas le contenu des <textarea>, d’où l’usage d’un bloc contentEditable
     const node = exportRef.current;
     if (!node) return;
     const canvas = await html2canvas(node, { scale: 2, backgroundColor: "#ffffff" });
@@ -317,7 +304,6 @@ Isolées : ${isolated.length}. Cycles : ${hasCycle ? "oui" : "non"}.
       </div>
 
       <div ref={exportRef} className="space-y-12">
-        {/* 1. Répartition par catégorie */}
         <section>
           <h3 className="font-bold mb-2">Répartition par catégorie</h3>
           <div className="w-full h-64 bg-white rounded-lg shadow border">
@@ -337,7 +323,6 @@ Isolées : ${isolated.length}. Cycles : ${hasCycle ? "oui" : "non"}.
           </div>
         </section>
 
-        {/* 2. Chronologie des ajouts */}
         <section>
           <h3 className="font-bold mb-2">Chronologie des contributions</h3>
           <div className="w-full h-64 bg-white rounded-lg shadow border">
@@ -353,7 +338,6 @@ Isolées : ${isolated.length}. Cycles : ${hasCycle ? "oui" : "non"}.
           </div>
         </section>
 
-        {/* 3. Top auteurs */}
         <section>
           <h3 className="font-bold mb-2">Top contributeurs</h3>
           <div className="w-full bg-white rounded-lg shadow border p-3">
@@ -393,7 +377,6 @@ Isolées : ${isolated.length}. Cycles : ${hasCycle ? "oui" : "non"}.
           </div>
         </section>
 
-        {/* 4. Insights rapides */}
         <section>
           <h3 className="font-bold mb-2">Insights</h3>
           <ul className="bg-white rounded-lg shadow border p-4 list-disc pl-6 space-y-1">
@@ -401,7 +384,6 @@ Isolées : ${isolated.length}. Cycles : ${hasCycle ? "oui" : "non"}.
           </ul>
         </section>
 
-        {/* 5. Synthèse IA éditable */}
         <section>
           <h3 className="font-bold mb-2">Synthèse IA (éditable)</h3>
           <div
@@ -414,7 +396,7 @@ Isolées : ${isolated.length}. Cycles : ${hasCycle ? "oui" : "non"}.
           </div>
           <p className="text-[11px] text-slate-500 mt-1">
             Astuce : éditez directement le texte ci-dessus. Le bouton “Régénérer” remplace le contenu par une nouvelle
-            analyse basée sur l’arbre actuel (vos modifications locales seront perdues).
+            analyse basée sur l’arbre actuel.
           </p>
         </section>
       </div>

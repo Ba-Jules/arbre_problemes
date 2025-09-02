@@ -2,11 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 /**
- * Génère un QR code fiable (canvas), avec:
- * - re-rendu si l’URL change
- * - bouton Télécharger (PNG)
- * - bouton Copier le lien
- * - lien affiché optionnel sous le QR (showLink)
+ * QR fiable (canvas) — aucun texte ne s'imprime sur le QR.
+ * Le lien est affiché *sous* le QR (jamais par-dessus).
  */
 export default function QRCodeGenerator({
   url,
@@ -30,10 +27,7 @@ export default function QRCodeGenerator({
         errorCorrectionLevel: "M",
         margin: 2,
         scale: 8,
-        color: {
-          dark: "#000000",
-          light: "#ffffff",
-        },
+        color: { dark: "#000000", light: "#ffffff" },
       };
 
       try {
@@ -45,9 +39,7 @@ export default function QRCodeGenerator({
     }
 
     render();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [url]);
 
   const handleDownload = () => {
@@ -99,7 +91,7 @@ export default function QRCodeGenerator({
             {error}
             <br />
             <span className="text-[11px] text-gray-600">
-              (Vous pouvez toujours utiliser le bouton “Copier le lien”)
+              (Vous pouvez toujours utiliser “Copier le lien”.)
             </span>
           </div>
         ) : (

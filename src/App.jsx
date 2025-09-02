@@ -24,6 +24,8 @@ import { db } from "./firebase-config";
 import QRCodeGenerator from "./components/QRCodeGenerator.jsx";
 import AnalysisPanel from "./components/AnalysisPanel.jsx";
 import ArbreProblemePresentation from "./components/ArbreProblemePresentation.jsx";
+import html2canvas from "html2canvas";
+import jsPDF from "jspdf";
 
 /* ========================= Constantes UI ========================= */
 
@@ -44,12 +46,6 @@ const CATEGORY_DEFAULT_COLOR = {
   problem: "red",
   causes: "pink",
   consequences: "green",
-};
-
-const CATEGORY_LABELS = {
-  problem: "Problèmes",
-  causes: "Causes",
-  consequences: "Conséquences",
 };
 
 const defaultPanelStates = {
@@ -109,7 +105,7 @@ export default function App() {
   /* -------- Layout “Focus” -------- */
   const [layoutMode, setLayoutMode] = useState("classic"); // 'classic' | 'focus'
   const [dockPosition, setDockPosition] = useState("right"); // 'right' | 'bottom'
-  const [dockHidden, setDockHidden] = useState(false); // nouveau
+  const [dockHidden, setDockHidden] = useState(false);
 
   /* -------- Analyse autonome (via URL) -------- */
   const [standaloneAnalysis, setStandaloneAnalysis] = useState(false);
@@ -137,10 +133,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // 1) Charge les flags au démarrage
     syncViewFromUrl();
-
-    // 2) Se resynchronise sur navigation arrière/avant
     const onPop = () => syncViewFromUrl();
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -157,12 +150,10 @@ export default function App() {
   const navigateToSession = (id) => {
     const url = new URL(window.location.href);
     url.searchParams.set("session", id);
-    // purge explicitement les flags d'analyse/mode
     url.searchParams.delete("analysis");
     url.searchParams.delete("mode");
     window.history.replaceState({}, "", url.toString());
     setSessionId(id);
-    // re-synchroniser la vue
     syncViewFromUrl();
   };
 
@@ -185,12 +176,10 @@ export default function App() {
         { sessionId: id, createdAt: serverTimestamp(), status: "active" },
         { merge: true }
       );
-    } catch {
-      /* no-op */
-    }
+    } catch {}
   };
 
-  /* -------- URL participant (toujours sans analysis) -------- */
+  /* -------- URL participant (sans analysis) -------- */
   const participantUrl = useMemo(() => {
     const url = new URL(window.location.href);
     url.searchParams.set("session", sessionId);
@@ -199,7 +188,7 @@ export default function App() {
     return url.toString();
   }, [sessionId]);
 
-  /* ========================= Charger métadonnées session ========================= */
+  /* ========================= Métadonnées session ========================= */
 
   useEffect(() => {
     if (!sessionId) return;
@@ -475,54 +464,75 @@ export default function App() {
 
   const renderConnections = () => {
     const byId = Object.fromEntries(postIts.map((p) => [p.id, p]));
-    const lines = [];
+    const items = [];
 
     connections.forEach((c) => {
       const a = byId[c.fromId];
       const b = byId[c.toId];
       if (!a || !b) return;
-      lines.push({ from: a, to: b });
-    });
 
-    return lines.map((ln, i) => {
-      const x1 = (ln.from.x || 0) + POSTIT_W / 2;
-      const y1 = (ln.from.y || 0) + POSTIT_H / 2;
-      const x2 = (ln.to.x || 0) + POSTIT_W / 2;
-      const y2 = (ln.to.y || 0) + POSTIT_H / 2;
+      const x1 = (a.x || 0) + POSTIT_W / 2;
+      const y1 = (a.y || 0) + POSTIT_H / 2;
+      const x2 = (b.x || 0) + POSTIT_W / 2;
+      const y2 = (b.y || 0) + POSTIT_H / 2;
 
       const midY = y1 + (y2 - y1) / 2;
       const d = `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
 
-      return (
-        <path
-          key={i}
-          d={d}
-          fill="none"
-          stroke="#0f172a"
-          strokeWidth="3"
-          markerEnd="url(#arrowhead)"
-          opacity="0.9"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
+      // point pour le bouton "supprimer le lien"
+      const cx = (x1 + x2) / 2;
+      const cy = midY;
+
+      items.push(
+        <g key={c.id}>
+          <path
+            d={d}
+            fill="none"
+            stroke="#0f172a"
+            strokeWidth="2.2"
+            markerEnd="url(#arrowhead)"
+            opacity="0.95"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ pointerEvents: "none" }}
+          />
+          {mode === "moderator" && (
+            <g
+              transform={`translate(${cx}, ${cy})`}
+              style={{ cursor: "pointer" }}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onClick={async (e) => {
+                e.stopPropagation();
+                try {
+                  await deleteDoc(doc(db, "connections", c.id));
+                } catch (err) {
+                  console.error(err);
+                }
+              }}
+            >
+              <circle r="8" fill="#ffffff" stroke="#334155" strokeWidth="1.2" />
+              <text
+                textAnchor="middle"
+                dominantBaseline="central"
+                fontSize="12"
+                fontWeight="bold"
+                fill="#334155"
+              >
+                ×
+              </text>
+            </g>
+          )}
+        </g>
       );
     });
+
+    return items;
   };
 
   /* ========================= Panneaux ========================= */
-
-  const setPanelState = (panel, state) => {
-    setPanelStates((prev) => ({ ...prev, [panel]: state }));
-  };
-  const minimizePanel = (panel) => setPanelState(panel, "minimized");
-  const maximizePanel = (panel) =>
-    setPanelStates({
-      causes: panel === "causes" ? "maximized" : "minimized",
-      tree: panel === "tree" ? "maximized" : "minimized",
-      consequences: panel === "consequences" ? "maximized" : "minimized",
-      problems: panel === "problems" ? "maximized" : "minimized",
-    });
-  const restorePanels = () => setPanelStates(defaultPanelStates);
 
   const getPanelClasses = (panel, base) => {
     const st = panelStates[panel];
@@ -531,48 +541,11 @@ export default function App() {
     return base;
   };
 
-  const PanelHeader = ({ title, panel, onAdd }) => {
-    const st = panelStates[panel];
-    return (
-      <div className="flex items-center justify-between p-2 border-b bg-white/70 backdrop-blur-sm">
-        <div className="font-semibold text-sm text-slate-700">
-          {st === "minimized" ? title.split(" ")[0] : title}
-        </div>
-        <div className="flex items-center gap-2">
-          {st !== "minimized" && onAdd && (
-            <button
-              onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
-              onClick={onAdd}
-              className="w-6 h-6 rounded bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700"
-              title="Ajouter un post-it"
-            >
-              +
-            </button>
-          )}
-          <button
-            onClick={() => minimizePanel(panel)}
-            className="w-6 h-6 rounded bg-slate-200 text-slate-600 text-xs"
-            title="Réduire"
-          >
-            –
-          </button>
-          <button
-            onClick={() =>
-              panelStates[panel] === "maximized"
-                ? restorePanels()
-                : maximizePanel(panel)
-            }
-            className="w-6 h-6 rounded bg-slate-200 text-slate-600 text-xs"
-            title={
-              panelStates[panel] === "maximized" ? "Restaurer" : "Agrandir"
-            }
-          >
-            □
-          </button>
-        </div>
-      </div>
-    );
-  };
+  const PanelHeader = ({ title }) => (
+    <div className="flex items-center justify-between p-2 border-b bg-white/70 backdrop-blur-sm">
+      <div className="font-semibold text-sm text-slate-700">{title}</div>
+    </div>
+  );
 
   /* ========================= Rendu Post-it ========================= */
 
@@ -605,38 +578,38 @@ export default function App() {
             : "Glissez pour déplacer"
         }
       >
-        {/* Rail d’actions (↑+ / ↓+) */}
+        {/* + discrets haut/bas */}
         {mode === "moderator" && !isConnecting && (
-          <div className="absolute -left-8 top-1/2 -translate-y-1/2 flex flex-col gap-2 pointer-events-auto">
+          <>
             <button
               type="button"
-              className="w-8 h-8 rounded-xl bg-emerald-600 text-white text-[14px] shadow border border-emerald-700 flex items-center justify-center"
-              title="Ajouter & relier au-dessus"
+              className="absolute left-1/2 -translate-x-1/2 -top-3 w-6 h-6 rounded-full bg-emerald-600 text-white text-[14px] leading-[22px] shadow"
+              title="Ajouter & relier (au-dessus)"
               onMouseDown={(ev)=>{ev.preventDefault();ev.stopPropagation();}}
               onClick={(ev) => {
                 ev.stopPropagation();
                 createLinkedPostIt(p, "up");
               }}
             >
-              ↑+
+              +
             </button>
             <button
               type="button"
-              className="w-8 h-8 rounded-xl bg-emerald-600 text-white text-[14px] shadow border border-emerald-700 flex items-center justify-center"
-              title="Ajouter & relier au-dessous"
+              className="absolute left-1/2 -translate-x-1/2 -bottom-3 w-6 h-6 rounded-full bg-emerald-600 text-white text-[14px] leading-[22px] shadow"
+              title="Ajouter & relier (au-dessous)"
               onMouseDown={(ev)=>{ev.preventDefault();ev.stopPropagation();}}
               onClick={(ev) => {
                 ev.stopPropagation();
                 createLinkedPostIt(p, "down");
               }}
             >
-              ↓+
+              +
             </button>
-          </div>
+          </>
         )}
 
         <div
-          className="rounded-lg p-3 shadow-lg border-2 relative overflow-hidden"
+          className="rounded-lg p-3 shadow-lg border-2 relative"
           style={{
             backgroundColor: color.bg,
             color: color.text,
@@ -818,7 +791,7 @@ export default function App() {
       const url = new URL(window.location.href);
       url.searchParams.delete("analysis");
       url.searchParams.delete("mode");
-      window.location.replace(url.toString()); // retour propre
+      window.location.replace(url.toString());
     };
 
     return (
@@ -874,6 +847,23 @@ export default function App() {
     setZoom(factor || 1);
   };
 
+  const exportTreeAsPDF = async () => {
+    const node = treeAreaRef.current;
+    if (!node) return;
+    const canvas = await html2canvas(node, { scale: 2, backgroundColor: "#ffffff" });
+    const imgData = canvas.toDataURL("image/png");
+    const pdf = new jsPDF("l", "mm", "a4");
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const ratio = Math.min(pageWidth / canvas.width, pageHeight / canvas.height);
+    const w = canvas.width * ratio;
+    const h = canvas.height * ratio;
+    const x = (pageWidth - w) / 2;
+    const y = (pageHeight - h) / 2;
+    pdf.addImage(imgData, "PNG", x, y, w, h);
+    pdf.save(`arbre-${sessionId}.pdf`);
+  };
+
   const visiblePostIts = {
     inTree: postIts.filter((p) => p.isInTree),
     causes: postIts.filter((p) => p.category === "causes" && !p.isInTree),
@@ -903,7 +893,7 @@ export default function App() {
     );
   }
 
-  /* ========= Rendus réutilisables ========= */
+  /* ========= Layouts ========= */
 
   const setPanelStateWrapper = (panel, base) =>
     `bg-white rounded shadow border ${getPanelClasses(panel, base)}`;
@@ -951,33 +941,20 @@ export default function App() {
   const ClassicLayout = () => (
     <div className="max-w-7xl mx-auto p-3 grid grid-cols-12 grid-rows-12 gap-2 h-[calc(100vh-56px)]">
       <div className={setPanelStateWrapper("causes", "col-span-3 row-span-9")}>
-        <PanelHeader
-          title="Causes"
-          panel="causes"
-          onAdd={() =>
-            addPostItToFirebase(
-              "Nouvelle cause",
-              "causes",
-              "Modérateur",
-              null,
-              null,
-              false,
-              CATEGORY_DEFAULT_COLOR.causes
-            )
-          }
-        />
+        <PanelHeader title="Causes" />
         <div className="p-2 h-full overflow-y-auto">
           <ColumnList items={visiblePostIts.causes} fallbackColor="pink" title="Causes" />
         </div>
       </div>
 
       <div className={setPanelStateWrapper("tree", "col-span-6 row-span-9")}>
-        <PanelHeader title="Arbre à Problèmes" panel="tree" />
+        <PanelHeader title="Arbre à Problèmes" />
         <div className="px-2 py-1 border-b flex items-center gap-2 text-sm">
           <button className="px-2 py-0.5 rounded bg-slate-200 text-slate-700" onClick={zoomOut} title="Dézoomer">–</button>
           <span className="min-w-[44px] text-center font-semibold">{Math.round(zoom * 100)}%</span>
           <button className="px-2 py-0.5 rounded bg-slate-200 text-slate-700" onClick={zoomIn} title="Zoomer">+</button>
           <button className="px-2 py-0.5 rounded bg-slate-200 text-slate-700" onClick={zoomFit} title="Ajuster">Ajuster</button>
+          <button className="ml-2 px-2 py-0.5 rounded bg-indigo-600 text-white" onClick={exportTreeAsPDF} title="Exporter l’arbre en PDF">Exporter PDF</button>
           <span className="ml-auto text-xs text-slate-500">Astuce&nbsp;: Ctrl/⌘ + molette</span>
         </div>
 
@@ -1002,7 +979,7 @@ export default function App() {
               transformOrigin: "0 0",
             }}
           >
-            <svg className="absolute inset-0 w-[2000px] h-[1200px] pointer-events-none" style={{ zIndex: 2 }}>
+            <svg className="absolute inset-0 w-[2000px] h-[1200px]" style={{ zIndex: 2 }}>
               <defs>
                 <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
                   <polygon points="0 0, 10 3.5, 0 7" fill="#0f172a" />
@@ -1016,42 +993,14 @@ export default function App() {
       </div>
 
       <div className={setPanelStateWrapper("consequences", "col-span-3 row-span-9")}>
-        <PanelHeader
-          title="Conséquences"
-          panel="consequences"
-          onAdd={() =>
-            addPostItToFirebase(
-              "Nouvelle conséquence",
-              "consequences",
-              "Modérateur",
-              null,
-              null,
-              false,
-              CATEGORY_DEFAULT_COLOR.consequences
-            )
-          }
-        />
+        <PanelHeader title="Conséquences" />
         <div className="p-2 h-full overflow-y-auto">
           <ColumnList items={visiblePostIts.consequences} fallbackColor="green" title="Conséquences" />
         </div>
       </div>
 
       <div className={setPanelStateWrapper("problems", "col-span-12 row-span-3")}>
-        <PanelHeader
-          title="Problèmes Suggérés"
-          panel="problems"
-          onAdd={() =>
-            addPostItToFirebase(
-              "Nouveau problème",
-              "problem",
-              "Modérateur",
-              null,
-              null,
-              false,
-              CATEGORY_DEFAULT_COLOR.problem
-            )
-          }
-        />
+        <PanelHeader title="Problèmes Suggérés" />
         <div className="p-2 h-full overflow-x-auto">
           <div className="flex gap-2">
             <ColumnList items={visiblePostIts.problems} fallbackColor="red" title="Problèmes" />
@@ -1084,7 +1033,7 @@ export default function App() {
             transformOrigin: "0 0",
           }}
         >
-          <svg className="absolute inset-0 w-[2000px] h-[1400px] pointer-events-none" style={{ zIndex: 2 }}>
+          <svg className="absolute inset-0 w-[2000px] h-[1400px]" style={{ zIndex: 2 }}>
             <defs>
               <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
                 <polygon points="0 0, 10 3.5, 0 7" fill="#0f172a" />
@@ -1096,31 +1045,25 @@ export default function App() {
         </div>
       </div>
 
-      {/* Contrôles zoom + dock */}
       <div className="absolute top-3 left-3 z-40 flex items-center gap-2 bg-white/90 backdrop-blur rounded shadow p-2">
         <button className="px-2 py-1 rounded bg-slate-200" onClick={zoomOut} title="Dézoomer">–</button>
         <span className="min-w-[44px] text-center font-semibold">{Math.round(zoom * 100)}%</span>
         <button className="px-2 py-1 rounded bg-slate-200" onClick={zoomIn} title="Zoomer">+</button>
         <button className="px-2 py-1 rounded bg-slate-200" onClick={zoomFit} title="Ajuster">Ajuster</button>
+        <button className="px-2 py-1 rounded bg-indigo-600 text-white" onClick={exportTreeAsPDF} title="Exporter l’arbre en PDF">Exporter PDF</button>
       </div>
 
       {!dockHidden && (dockPosition === "right" ? (
         <div className="absolute right-2 top-16 bottom-2 w-72 bg-white/95 backdrop-blur border rounded-lg shadow p-2 overflow-y-auto z-30">
           <div className="text-sm font-bold mb-2">📥 Zones de collecte</div>
           <div className="space-y-4">
-            <DockSection title="Causes" add={() =>
-              addPostItToFirebase("Nouvelle cause","causes","Modérateur",null,null,false,CATEGORY_DEFAULT_COLOR.causes)
-            }>
+            <DockSection title="Causes">
               <ColumnList items={visiblePostIts.causes} fallbackColor="pink" title="Causes" />
             </DockSection>
-            <DockSection title="Conséquences" add={() =>
-              addPostItToFirebase("Nouvelle conséquence","consequences","Modérateur",null,null,false,CATEGORY_DEFAULT_COLOR.consequences)
-            }>
+            <DockSection title="Conséquences">
               <ColumnList items={visiblePostIts.consequences} fallbackColor="green" title="Conséquences" />
             </DockSection>
-            <DockSection title="Problèmes" add={() =>
-              addPostItToFirebase("Nouveau problème","problem","Modérateur",null,null,false,CATEGORY_DEFAULT_COLOR.problem)
-            }>
+            <DockSection title="Problèmes">
               <ColumnList items={visiblePostIts.problems} fallbackColor="red" title="Problèmes" />
             </DockSection>
           </div>
@@ -1129,19 +1072,13 @@ export default function App() {
         <div className="absolute left-2 right-2 bottom-2 bg-white/95 backdrop-blur border rounded-lg shadow p-2 z-30">
           <div className="text-sm font-bold mb-2">📥 Zones de collecte</div>
           <div className="grid grid-cols-3 gap-3 max-h-60 overflow-y-auto">
-            <DockSection title="Causes" add={() =>
-              addPostItToFirebase("Nouvelle cause","causes","Modérateur",null,null,false,CATEGORY_DEFAULT_COLOR.causes)
-            }>
+            <DockSection title="Causes">
               <ColumnList items={visiblePostIts.causes} fallbackColor="pink" title="Causes" />
             </DockSection>
-            <DockSection title="Conséquences" add={() =>
-              addPostItToFirebase("Nouvelle conséquence","consequences","Modérateur",null,null,false,CATEGORY_DEFAULT_COLOR.consequences)
-            }>
+            <DockSection title="Conséquences">
               <ColumnList items={visiblePostIts.consequences} fallbackColor="green" title="Conséquences" />
             </DockSection>
-            <DockSection title="Problèmes" add={() =>
-              addPostItToFirebase("Nouveau problème","problem","Modérateur",null,null,false,CATEGORY_DEFAULT_COLOR.problem)
-            }>
+            <DockSection title="Problèmes">
               <ColumnList items={visiblePostIts.problems} fallbackColor="red" title="Problèmes" />
             </DockSection>
           </div>
@@ -1150,14 +1087,11 @@ export default function App() {
     </div>
   );
 
-  function DockSection({ title, add, children }) {
+  function DockSection({ title, children }) {
     return (
       <div>
         <div className="flex items-center justify-between mb-1">
           <div className="font-semibold">{title}</div>
-          <button className="px-2 py-0.5 rounded bg-indigo-600 text-white text-xs"
-            onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
-            onClick={add}>+</button>
         </div>
         {children}
       </div>
@@ -1307,16 +1241,9 @@ export default function App() {
           </div>
           <div className="p-3">
             <div className="w-full flex justify-center">
-              <QRCodeGenerator url={participantUrl} showLink={false} />
+              {/* lien affiché dessous, jamais surimprimé sur le QR */}
+              <QRCodeGenerator url={participantUrl} showLink={true} />
             </div>
-            <div className="text-center text-xs mt-2">Participants</div>
-            <div className="mt-3 text-[11px] break-all text-slate-600">{participantUrl}</div>
-            <button
-              className="mt-2 w-full px-3 py-2 rounded bg-slate-200 text-slate-800 text-sm font-semibold"
-              onClick={() => navigator.clipboard.writeText(participantUrl)}
-            >
-              Copier le lien
-            </button>
           </div>
         </div>
       )}
