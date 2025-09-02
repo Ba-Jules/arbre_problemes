@@ -23,7 +23,6 @@ import { db } from "./firebase-config";
 
 // Composants locaux
 import QRCodeGenerator from "./components/QRCodeGenerator.jsx";
-import ColorPalette from "./components/ColorPalette.jsx";
 import AnalysisPanel from "./components/AnalysisPanel.jsx";
 import ArbreProblemePresentation from "./components/ArbreProblemePresentation.jsx";
 
@@ -51,7 +50,7 @@ const CATEGORY_DEFAULT_COLOR = {
 };
 
 const CATEGORY_LABELS = {
-  problem: "Problème central",
+  problem: "Problèmes",
   causes: "Causes",
   consequences: "Conséquences",
 };
@@ -104,7 +103,7 @@ export default function App() {
   const [projectName, setProjectName] = useState("");
   const [theme, setTheme] = useState("");
 
-  // Panneaux latéraux
+  // Panneaux latéraux (on garde le tiroir pour debug si besoin)
   const [showQR, setShowQR] = useState(false);
   const [showAnalysis, setShowAnalysis] = useState(false);
 
@@ -115,8 +114,14 @@ export default function App() {
   const [participantName, setParticipantName] = useState(
     () => localStorage.getItem("participantName") || ""
   );
+  const [isAnonymous, setIsAnonymous] = useState(
+    () => (localStorage.getItem("participantName") || "") === "Anonyme"
+  );
   const [selectedCategory, setSelectedCategory] = useState("problem");
   const [participantContent, setParticipantContent] = useState("");
+
+  /* -------- Standalone Analysis -------- */
+  const [standaloneAnalysis, setStandaloneAnalysis] = useState(false);
 
   /* -------- Refs -------- */
   const treeAreaRef = useRef(null);
@@ -126,6 +131,7 @@ export default function App() {
     const url = new URL(window.location.href);
     url.searchParams.set("session", sessionId);
     url.searchParams.set("mode", "participant");
+    url.searchParams.delete("analysis");
     return url.toString();
   }, [sessionId]);
 
@@ -158,7 +164,7 @@ export default function App() {
     setIsConnecting(false);
     setConnectSourceId(null);
     setPaintMode(false);
-    setShowPresentation(true); // afficher la présentation au début d'une nouvelle session
+    setShowPresentation(true); // démarrer par l’écran de présentation
 
     try {
       await setDoc(
@@ -177,8 +183,10 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const m = params.get("mode");
     const s = params.get("session");
+    const a = params.get("analysis");
     if (m === "participant") setMode("participant");
     if (s) setSessionId(s);
+    if (a === "1" || m === "analysis") setStandaloneAnalysis(true);
   }, []);
 
   /* ========================= Charger métadonnées session ========================= */
@@ -192,7 +200,6 @@ export default function App() {
           const data = snap.data();
           setProjectName(data.projectName || "");
           setTheme(data.theme || "");
-          // Si aucune méta n'est encore saisie et qu'on est côté modérateur, montrer la présentation
           if (mode !== "participant" && !(data.projectName || data.theme)) {
             setShowPresentation(true);
           }
@@ -215,7 +222,6 @@ export default function App() {
     const unsubP = onSnapshot(qP, (snap) => {
       const arr = [];
       snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
-      // tri simple (timestamp si dispo)
       arr.sort(
         (a, b) =>
           (a.timestamp?.toMillis?.() || 0) - (b.timestamp?.toMillis?.() || 0)
@@ -298,7 +304,6 @@ export default function App() {
   const deletePostItFromFirebase = async (id) => {
     try {
       await deleteDoc(doc(db, "postits", id));
-      // supprimer les liens associés
       const rel = connections.filter(
         (c) => c.fromId === id || c.toId === id
       );
@@ -316,7 +321,6 @@ export default function App() {
     if (mode !== "moderator") return;
     e.preventDefault();
 
-    // Mode Peindre : un clic applique la couleur active et s'arrête là
     if (paintMode) {
       updatePostItInFirebase(postItId, {
         color: activeColor,
@@ -329,7 +333,6 @@ export default function App() {
       if (!connectSourceId) {
         setConnectSourceId(postItId);
       } else if (connectSourceId !== postItId) {
-        // créer la connexion
         addDoc(collection(db, "connections"), {
           sessionId,
           fromId: connectSourceId,
@@ -355,7 +358,6 @@ export default function App() {
       const area = treeAreaRef.current;
       if (!area) return;
 
-      // coordonnées relatives à l’aire (en tenant compte du zoom)
       const rect = area.getBoundingClientRect();
       const relX = (e.clientX - rect.left) / zoom;
       const relY = (e.clientY - rect.top) / zoom;
@@ -435,7 +437,6 @@ export default function App() {
       const x2 = (ln.to.x || 0) + POSTIT_W / 2;
       const y2 = (ln.to.y || 0) + POSTIT_H / 2;
 
-      // Lignes orthogonales harmonieuses
       const midY = y1 + (y2 - y1) / 2;
       const d = `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
 
@@ -580,7 +581,6 @@ export default function App() {
                 title="Couleur"
                 onClick={(ev) => {
                   ev.stopPropagation();
-                  // fait cycler les couleurs
                   const keys = Object.keys(COLOR_PALETTE);
                   const idx = Math.max(0, keys.indexOf(p.color));
                   const next = keys[(idx + 1) % keys.length];
@@ -613,12 +613,17 @@ export default function App() {
     );
   };
 
-  /* ========================= Participant ========================= */
+  /* ========================= Participant (vue unifiée) ========================= */
 
-  if (mode === "participant") {
+  if (mode === "participant" && !standaloneAnalysis) {
+    const canSend =
+      participantContent.trim().length > 0 &&
+      (isAnonymous || (participantName.trim().length >= 2));
+
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-50 p-4">
         <div className="max-w-md mx-auto">
+          {/* Entête */}
           <div className="text-center mb-4">
             <h1 className="text-xl font-black text-gray-900">
               🌳 Arbre à Problèmes
@@ -632,82 +637,59 @@ export default function App() {
             )}
           </div>
 
-          {!participantName && (
-            <div className="bg-white rounded-xl p-5 shadow">
-              <h2 className="text-base font-bold mb-2">Votre nom</h2>
+          {/* Carte unique : Nom/Anonyme + Catégorie + Contenu + Envoyer */}
+          <div className="bg-white rounded-xl p-5 shadow space-y-4">
+            {/* Nom + Anonyme */}
+            <div>
+              <label className="block text-sm font-bold mb-1">
+                Nom / Prénom
+              </label>
               <input
                 type="text"
-                value={participantName}
-                onChange={(e) => setParticipantName(e.target.value)}
-                className="w-full p-3 border-2 border-gray-300 rounded-lg text-base"
-                placeholder="Entrez votre nom…"
+                value={isAnonymous ? "" : participantName}
+                onChange={(e) => {
+                  setParticipantName(e.target.value);
+                  if (isAnonymous) setIsAnonymous(false);
+                }}
+                disabled={isAnonymous}
+                className="w-full p-3 border-2 border-gray-300 rounded-lg text-base disabled:opacity-60"
+                placeholder="Entrez votre nom… (ou cochez Anonyme)"
               />
-              <div className="flex gap-2 mt-3">
-                <button
-                  type="button"
-                  disabled={!participantName.trim()}
-                  onClick={() => {
-                    const v = participantName.trim();
-                    if (!v) return;
-                    localStorage.setItem("participantName", v);
-                    setParticipantName(v);
+              <label className="mt-2 inline-flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={isAnonymous}
+                  onChange={(e) => {
+                    const v = e.target.checked;
+                    setIsAnonymous(v);
+                    if (v) {
+                      setParticipantName("Anonyme");
+                    } else if (participantName === "Anonyme") {
+                      setParticipantName("");
+                    }
                   }}
-                  className="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-bold disabled:opacity-40"
-                >
-                  Continuer
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    localStorage.setItem("participantName", "Anonyme");
-                    setParticipantName("Anonyme");
-                  }}
-                  className="px-4 bg-gray-200 text-gray-800 rounded-lg font-bold"
-                >
-                  Anonyme
-                </button>
-              </div>
+                />
+                Participer en <strong>Anonyme</strong>
+              </label>
             </div>
-          )}
 
-          {participantName && (
-            <div className="bg-white rounded-xl p-5 shadow">
-              <div className="mb-3">
-                <label className="block text-sm font-bold mb-1">
-                  Catégorie
-                </label>
-                <div className="grid grid-cols-1 gap-2">
-                  {Object.keys(CATEGORY_LABELS).map((cat) => (
-                    <button
-                      key={cat}
-                      onClick={() => setSelectedCategory(cat)}
-                      className={`p-3 rounded-lg font-bold text-left ${
-                        selectedCategory === cat
-                          ? "ring-2 ring-offset-2 ring-indigo-500"
-                          : "hover:bg-gray-50"
-                      }`}
-                      style={{
-                        backgroundColor:
-                          selectedCategory === cat
-                            ? COLOR_PALETTE[
-                                CATEGORY_DEFAULT_COLOR[cat] || "red"
-                              ].bg
-                            : "#f9fafb",
-                        color:
-                          selectedCategory === cat
-                            ? COLOR_PALETTE[
-                                CATEGORY_DEFAULT_COLOR[cat] || "red"
-                              ].text
-                            : "#374151",
-                        fontFamily: "'Arial Black', Arial, sans-serif",
-                      }}
-                    >
-                      {CATEGORY_LABELS[cat]}
-                    </button>
-                  ))}
-                </div>
-              </div>
+            {/* Catégorie (liste déroulante) */}
+            <div>
+              <label className="block text-sm font-bold mb-1">Catégorie</label>
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="w-full p-3 border-2 border-gray-300 rounded-lg"
+              >
+                <option value="problem">Problèmes</option>
+                <option value="causes">Causes</option>
+                <option value="consequences">Conséquences</option>
+              </select>
+            </div>
 
+            {/* Contenu */}
+            <div>
+              <label className="block text-sm font-bold mb-1">Votre post-it</label>
               <textarea
                 rows={4}
                 value={participantContent}
@@ -720,42 +702,60 @@ export default function App() {
               <div className="text-xs text-gray-500 mt-1 text-right">
                 {MAX_CHARS - (participantContent?.length || 0)} car. restants
               </div>
-
-              <button
-                type="button"
-                className="mt-3 w-full bg-indigo-600 text-white py-3 rounded-lg font-bold disabled:opacity-40"
-                disabled={!participantContent.trim()}
-                onClick={async () => {
-                  await addPostItToFirebase(
-                    participantContent,
-                    selectedCategory,
-                    participantName || "Anonyme",
-                    null,
-                    null,
-                    false,
-                    CATEGORY_DEFAULT_COLOR[selectedCategory] || "red"
-                  );
-                  setParticipantContent("");
-                }}
-              >
-                Envoyer
-              </button>
-
-              <div className="mt-3 text-sm text-gray-600">
-                Connecté en tant que&nbsp;:{" "}
-                <strong>{participantName}</strong>
-                <button
-                  onClick={() => {
-                    setParticipantName("");
-                    localStorage.removeItem("participantName");
-                  }}
-                  className="text-xs text-indigo-600 ml-2 hover:underline"
-                >
-                  Changer
-                </button>
-              </div>
             </div>
-          )}
+
+            {/* Envoyer */}
+            <button
+              type="button"
+              className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold disabled:opacity-40"
+              disabled={!canSend}
+              onClick={async () => {
+                const author = isAnonymous ? "Anonyme" : participantName.trim();
+                await addPostItToFirebase(
+                  participantContent,
+                  selectedCategory,
+                  author,
+                  null,
+                  null,
+                  false,
+                  CATEGORY_DEFAULT_COLOR[selectedCategory] || "red"
+                );
+                // Mémoriser le choix
+                localStorage.setItem("participantName", author);
+                setParticipantContent("");
+              }}
+            >
+              Envoyer
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ========================= Page d'analyse autonome (nouvel onglet) ========================= */
+
+  if (standaloneAnalysis) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100">
+        <div className="sticky top-0 z-40 bg-white/90 backdrop-blur border-b">
+          <div className="max-w-7xl mx-auto px-3 py-2 flex items-center gap-3">
+            <span className="text-lg">📊</span>
+            <span className="font-bold text-slate-800">Analyse — Arbre à Problèmes</span>
+            <span className="text-xs text-slate-500">Session: {sessionId}</span>
+            {(projectName || theme) && (
+              <span className="text-xs text-slate-700 font-bold">
+                • {projectName}{theme ? " — " + theme : ""}
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="max-w-7xl mx-auto p-4">
+          <AnalysisPanel
+            sessionId={sessionId}
+            postIts={postIts}
+            connections={connections}
+          />
         </div>
       </div>
     );
@@ -766,7 +766,6 @@ export default function App() {
   const zoomOut = () => setZoom((z) => Math.max(0.5, +(z - 0.1).toFixed(2)));
   const zoomIn = () => setZoom((z) => Math.min(2, +(z + 0.1).toFixed(2)));
   const zoomFit = () => {
-    // Ajuste horizontalement dans la zone visible
     const wrap = treeScrollRef.current;
     const area = treeAreaRef.current;
     if (!wrap || !area) return;
@@ -774,20 +773,20 @@ export default function App() {
     const contentH = area.scrollHeight;
     const availW = wrap.clientWidth;
     const availH = wrap.clientHeight;
-    const factor = Math.max(0.5, Math.min(2, +(Math.min(availW / contentW, availH / contentH)).toFixed(2)));
+    const factor = Math.max(
+      0.5,
+      Math.min(2, +(Math.min(availW / contentW, availH / contentH)).toFixed(2))
+    );
     setZoom(factor || 1);
   };
 
   const visiblePostIts = {
     inTree: postIts.filter((p) => p.isInTree),
     causes: postIts.filter((p) => p.category === "causes" && !p.isInTree),
-    consequences: postIts.filter(
-      (p) => p.category === "consequences" && !p.isInTree
-    ),
+    consequences: postIts.filter((p) => p.category === "consequences" && !p.isInTree),
     problems: postIts.filter((p) => p.category === "problem" && !p.isInTree),
   };
 
-  // Gestion "Démarrer l'atelier" depuis l'écran de présentation
   const handlePresentationComplete = async ({ projectName: p, theme: t }) => {
     await setDoc(
       doc(db, "sessions", sessionId),
@@ -799,7 +798,6 @@ export default function App() {
     setShowPresentation(false);
   };
 
-  // Écran d'accueil (présentation) si demandé
   if (showPresentation && mode !== "participant") {
     return (
       <ArbreProblemePresentation
@@ -826,7 +824,7 @@ export default function App() {
             </span>
           </div>
 
-          {/* Projet / Thème (gros, visibles) */}
+          {/* Projet / Thème */}
           <div className="ml-3 flex items-center gap-2 flex-1">
             <input
               className="px-3 py-1 border rounded text-sm font-bold"
@@ -856,7 +854,7 @@ export default function App() {
             />
           </div>
 
-          {/* Palette de couleurs */}
+          {/* Palette rapide */}
           <div className="hidden md:flex items-center gap-1">
             {Object.keys(COLOR_PALETTE).map((k) => (
               <button
@@ -882,7 +880,6 @@ export default function App() {
               onClick={() => {
                 setPaintMode((v) => !v);
                 if (!paintMode) {
-                  // désactive l'autre mode pour éviter les conflits
                   setIsConnecting(false);
                   setConnectSourceId(null);
                 }
@@ -901,7 +898,7 @@ export default function App() {
               onClick={() => {
                 setIsConnecting((v) => !v);
                 setConnectSourceId(null);
-                if (!isConnecting) setPaintMode(false); // exclusif avec Peindre
+                if (!isConnecting) setPaintMode(false);
               }}
               title="Relier des post-its"
             >
@@ -916,10 +913,18 @@ export default function App() {
               Nouvelle session
             </button>
 
+            {/* Analyse => nouvel onglet */}
             <button
               className="px-3 py-1 rounded text-sm font-semibold bg-emerald-600 text-white"
-              onClick={() => setShowAnalysis((v) => !v)}
-              title="Analyse"
+              onClick={() => {
+                const url = new URL(window.location.href);
+                url.searchParams.set("analysis", "1");
+                url.searchParams.delete("mode"); // s'assurer d'une vue dédiée
+                window.open(url.toString(), "_blank", "noopener");
+                // Option: garder le tiroir accessible en Alt+Click
+                // setShowAnalysis((v) => !v);
+              }}
+              title="Analyse (ouvre un nouvel onglet)"
             >
               Analyse
             </button>
@@ -1007,7 +1012,7 @@ export default function App() {
           )}`}
         >
           <PanelHeader title="Arbre à Problèmes" panel="tree" />
-          {/* Contrôles de zoom (barre fine) */}
+          {/* Contrôles de zoom */}
           <div className="px-2 py-1 border-b flex items-center gap-2 text-sm">
             <button
               className="px-2 py-0.5 rounded bg-slate-200 text-slate-700"
@@ -1228,7 +1233,6 @@ export default function App() {
           </div>
           <div className="p-3">
             <div className="w-full flex justify-center">
-              {/* Correctif: props du composant QR */}
               <QRCodeGenerator url={participantUrl} />
             </div>
             <div className="text-center text-xs mt-2">Participants</div>
@@ -1247,7 +1251,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ======= Drawer Analyse ======= */}
+      {/* ======= Drawer Analyse (optionnel) ======= */}
       {showAnalysis && (
         <div className="fixed top-[56px] right-3 z-50 w-[380px] max-h-[calc(100vh-64px)] overflow-auto bg-white rounded shadow-lg border">
           <div className="p-3 border-b flex items-center justify-between">
@@ -1261,7 +1265,8 @@ export default function App() {
             </button>
           </div>
           <div className="p-3">
-            <AnalysisPanel sessionId={sessionId} />
+            {/* On passe bien les données ici aussi */}
+            <AnalysisPanel sessionId={sessionId} postIts={postIts} connections={connections} />
           </div>
         </div>
       )}
