@@ -1,115 +1,470 @@
-import React, { useEffect, useRef, useState } from "react";
-import QRCode from "qrcode";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  PieChart,
+  Pie,
+  Cell,
+  Legend,
+} from "recharts";
+import html2canvas from "html2canvas";
+import jsPDF from "jspdf";
 
 /**
- * Génère un QR en <canvas> (sans texte surimprimé).
- * Le lien est affiché *sous* le QR (jamais par-dessus).
+ * Panneau d'analyse (nouvel onglet).
+ * Affiche métriques, graphiques, et une synthèse IA locale éditable.
+ *
+ * Props :
+ * - sessionId
+ * - postIts: [{id, content, author, category, isInTree, x, y, color}]
+ * - connections: [{id, fromId, toId}]
+ * - projectName, theme
  */
-export default function QRCodeGenerator({
-  url,
-  size = 100,          // plus petit par défaut
-  title = "QR participants",
-  className = "",
-  showLink = true,
+export default function AnalysisPanel({
+  sessionId,
+  postIts = [],
+  connections = [],
+  projectName = "",
+  theme = "",
 }) {
-  const canvasRef = useRef(null);
-  const [error, setError] = useState(null);
+  const containerRef = useRef(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  /* ===================== Pré-calculs ===================== */
 
-    async function render() {
-      setError(null);
-      const canvas = canvasRef.current;
-      if (!canvas) return;
+  const byId = useMemo(
+    () => Object.fromEntries((postIts || []).map((p) => [p.id, p])),
+    [postIts]
+  );
 
-      const opts = {
-        errorCorrectionLevel: "M",
-        margin: 1,
-        scale: 8,
-        color: { dark: "#000000", light: "#ffffff" },
+  const graph = useMemo(() => {
+    const inMap = new Map();  // nodeId -> parents[]
+    const outMap = new Map(); // nodeId -> children[]
+
+    postIts.forEach((p) => {
+      inMap.set(p.id, []);
+      outMap.set(p.id, []);
+    });
+
+    connections.forEach((c) => {
+      if (!byId[c.fromId] || !byId[c.toId]) return;
+      outMap.get(c.fromId)?.push(c.toId);
+      inMap.get(c.toId)?.push(c.fromId);
+    });
+
+    return { inMap, outMap };
+  }, [postIts, connections, byId]);
+
+  const degreeStats = useMemo(() => {
+    const rows = postIts.map((p) => {
+      const indeg = graph.inMap.get(p.id)?.length || 0;
+      const outdeg = graph.outMap.get(p.id)?.length || 0;
+      return {
+        id: p.id,
+        label: (p.content || "").slice(0, 32) || "(sans texte)",
+        indeg,
+        outdeg,
+        deg: indeg + outdeg,
+        isInTree: !!p.isInTree,
+        category: p.category || "problem",
       };
+    });
+    const top = rows
+      .filter((r) => r.isInTree)
+      .sort((a, b) => b.deg - a.deg)
+      .slice(0, 8);
+    return { rows, top };
+  }, [postIts, graph]);
 
-      try {
-        await QRCode.toCanvas(canvas, url || "", opts);
-        if (cancelled) return;
-      } catch (e) {
-        if (!cancelled) setError(e?.message || "Impossible de générer le QR");
+  const counts = useMemo(() => {
+    const total = postIts.length;
+    const links = connections.length;
+    const inTree = postIts.filter((p) => p.isInTree).length;
+    const offTree = total - inTree;
+
+    const cats = {
+      problem: postIts.filter((p) => p.category === "problem").length,
+      causes: postIts.filter((p) => p.category === "causes").length,
+      consequences: postIts.filter((p) => p.category === "consequences").length,
+    };
+
+    // Entrées = nœuds inTree sans parents ; Sorties = nœuds inTree sans enfants
+    const roots = postIts.filter(
+      (p) => p.isInTree && (graph.inMap.get(p.id)?.length || 0) === 0
+    );
+    const leaves = postIts.filter(
+      (p) => p.isInTree && (graph.outMap.get(p.id)?.length || 0) === 0
+    );
+
+    // Isolés = inTree avec deg = 0
+    const isolated = postIts.filter((p) => {
+      if (!p.isInTree) return false;
+      const indeg = graph.inMap.get(p.id)?.length || 0;
+      const outdeg = graph.outMap.get(p.id)?.length || 0;
+      return indeg + outdeg === 0;
+    });
+
+    return {
+      total,
+      links,
+      inTree,
+      offTree,
+      cats,
+      roots,
+      leaves,
+      isolated,
+    };
+  }, [postIts, connections, graph]);
+
+  /* ===================== Graphiques ===================== */
+
+  const categoryData = useMemo(
+    () => [
+      { name: "Problèmes", value: counts.cats.problem },
+      { name: "Causes", value: counts.cats.causes },
+      { name: "Conséquences", value: counts.cats.consequences },
+    ],
+    [counts]
+  );
+
+  const barData = useMemo(() => {
+    // Top nœuds par degré (dans l'arbre)
+    return degreeStats.top.map((r) => ({
+      label: r.label,
+      Degré: r.deg,
+    }));
+  }, [degreeStats]);
+
+  /* ===================== Chaînes cause → … → conséquence ===================== */
+
+  const sampleChains = useMemo(() => {
+    // Petite recherche de chemins (longueur <= 4) partant d'une cause vers une conséquence,
+    // en passant éventuellement par un problème.
+    const chains = [];
+    const maxLen = 4;
+
+    const dfs = (path) => {
+      const last = path[path.length - 1];
+      const lastNode = byId[last];
+      if (!lastNode) return;
+      if (path.length > maxLen) return;
+
+      if (
+        path.length >= 2 &&
+        lastNode.category === "consequences" &&
+        byId[path[0]]?.category === "causes"
+      ) {
+        chains.push([...path]);
       }
+
+      const nexts = graph.outMap.get(last) || [];
+      nexts.forEach((n) => {
+        if (!path.includes(n)) dfs([...path, n]);
+      });
+    };
+
+    postIts
+      .filter((p) => p.isInTree && p.category === "causes")
+      .forEach((p) => dfs([p.id]));
+
+    // On renvoie 5 chaînes max pour lecture
+    return chains.slice(0, 5).map((ids) => ids.map((id) => byId[id]?.content || "(?)"));
+  }, [postIts, graph, byId]);
+
+  /* ===================== Synthèse IA locale ===================== */
+
+  const initialSummary = useMemo(() => {
+    const lines = [];
+
+    lines.push("SYNTHÈSE AUTOMATIQUE (éditable)");
+    lines.push("");
+    lines.push(
+      `Aperçu global : ${counts.total} étiquettes, ${counts.links} liaisons.`
+    );
+    lines.push(
+      `Dans l'arbre : ${counts.inTree} — Hors arbre : ${counts.offTree}.`
+    );
+    lines.push(
+      `Répartition : Problèmes ${counts.cats.problem}, Causes ${counts.cats.causes}, Conséquences ${counts.cats.consequences}.`
+    );
+    lines.push("");
+
+    // Nœuds structurants
+    if (degreeStats.top.length) {
+      lines.push("Points structurants (nœuds les plus connectés) :");
+      degreeStats.top.forEach((n) =>
+        lines.push(`- ${n.label} (degré ${n.deg})`)
+      );
+    } else {
+      lines.push("Points structurants : —");
     }
+    lines.push("");
 
-    render();
-    return () => { cancelled = true; };
-  }, [url]);
+    // Racines & feuilles
+    if (counts.roots.length) {
+      lines.push("Entrées majeures (sans parents) :");
+      counts.roots.slice(0, 6).forEach((p) =>
+        lines.push(`- ${trimTxt(p.content)}`)
+      );
+    } else {
+      lines.push("Entrées majeures (sans parents) : —");
+    }
+    lines.push("");
 
-  const handleDownload = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const a = document.createElement("a");
-    a.download = "participants-qr.png";
-    a.href = canvas.toDataURL("image/png");
-    a.click();
-  };
+    if (counts.leaves.length) {
+      lines.push("Sorties majeures (sans enfants) :");
+      counts.leaves.slice(0, 6).forEach((p) =>
+        lines.push(`- ${trimTxt(p.content)}`)
+      );
+    } else {
+      lines.push("Sorties majeures (sans enfants) : —");
+    }
+    lines.push("");
 
-  const handleCopy = async () => {
+    if (counts.isolated.length) {
+      lines.push(
+        `Étiquettes isolées dans l'arbre : ${counts.isolated.length} (à relier ou à supprimer).`
+      );
+    } else {
+      lines.push("Pas d'étiquettes isolées détectées.");
+    }
+    lines.push("");
+
+    // Chaînes
+    if (sampleChains.length) {
+      lines.push(
+        "Chaînes « cause → … → conséquence » (exemples) :"
+      );
+      sampleChains.forEach((ch, i) => {
+        lines.push(`- Chaîne ${i + 1} : ${ch.map(trimTxt).join(" → ")}`);
+      });
+    } else {
+      lines.push(
+        "Chaînes « cause → … → conséquence » : non détectées (ou non reliées)."
+      );
+    }
+    lines.push("");
+
+    // Recommandations heuristiques
+    lines.push("Recommandations (heuristiques) :");
+    if (counts.isolated.length) {
+      lines.push(
+        "- Relier ou écarter les étiquettes isolées pour clarifier la logique."
+      );
+    }
+    if (counts.roots.length > counts.leaves.length + 3) {
+      lines.push(
+        "- Beaucoup d'entrées pour peu de sorties : regrouper les causes et préciser les conséquences concrètes."
+      );
+    }
+    if (degreeStats.top[0]?.deg >= 4) {
+      lines.push(
+        `- Le nœud « ${degreeStats.top[0].label} » est très central : valider qu'il ne regroupe pas plusieurs idées distinctes.`
+      );
+    }
+    lines.push(
+      "- Vérifier que chaque conséquence découle d'au moins une cause et qu'un problème central est explicite."
+    );
+    lines.push(
+      "- En fin d'atelier : formaliser un plan d'actions priorisé (impact × faisabilité)."
+    );
+
+    return lines.join("\n");
+  }, [counts, degreeStats, sampleChains]);
+
+  const [summary, setSummary] = useState(initialSummary);
+  useEffect(() => {
+    setSummary(initialSummary);
+  }, [initialSummary]);
+
+  /* ===================== Actions ===================== */
+
+  const copySummary = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(url || "");
-      alert("Lien copié ✅");
+      await navigator.clipboard.writeText(summary);
+      alert("Texte copié ✅");
     } catch {
-      prompt("Copiez le lien :", url || "");
+      // fallback
+      window.prompt("Copiez le texte :", summary);
     }
-  };
+  }, [summary]);
+
+  const exportPDF = useCallback(async () => {
+    const node = containerRef.current;
+    if (!node) return;
+
+    // Capture propre
+    const canvas = await html2canvas(node, {
+      scale: 2.5,
+      backgroundColor: "#ffffff",
+      useCORS: true,
+      letterRendering: true,
+    });
+    const imgData = canvas.toDataURL("image/png");
+    const pdf = new jsPDF("p", "mm", "a4");
+
+    // Fit dans la page
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const ratio = Math.min(pageW / canvas.width, pageH / canvas.height);
+    const w = canvas.width * ratio;
+    const h = canvas.height * ratio;
+    const x = (pageW - w) / 2;
+    const y = (pageH - h) / 2;
+
+    pdf.addImage(imgData, "PNG", x, y, w, h);
+    pdf.save(`analyse-${sessionId}.pdf`);
+  }, [sessionId]);
+
+  /* ===================== Rendu ===================== */
 
   return (
-    <div className={`w-full ${className}`}>
-      <div className="text-xs font-semibold mb-2 flex items-center justify-between">
-        <span>▼ {title}</span>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={handleDownload}
-            className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300 text-xs"
-          >
-            PNG
-          </button>
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300 text-xs"
-          >
-            Copier le lien
-          </button>
+    <div className="space-y-3" ref={containerRef}>
+      {/* Bandeau */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="text-sm text-slate-600">
+          <strong>Session</strong> : {sessionId}
         </div>
-      </div>
-
-      <div
-        className="relative overflow-hidden bg-white border rounded p-2 flex items-center justify-center"
-        style={{ width: size + 16, height: size + 16 }}
-      >
-        {error ? (
-          <div className="text-xs text-red-600 text-center leading-snug">
-            {error}
-            <br />
-            <span className="text-[11px] text-gray-600">
-              (Utilisez “Copier le lien”.)
-            </span>
+        {(projectName || theme) && (
+          <div className="text-sm text-slate-700">
+            <strong>Contexte</strong> : {projectName}
+            {theme ? " — " + theme : ""}
           </div>
-        ) : (
-          <canvas
-            ref={canvasRef}
-            width={size}
-            height={size}
-            style={{ width: size, height: size }}
-            aria-label="QR code participants"
-          />
         )}
+
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            className="px-3 py-1 rounded bg-slate-200 text-slate-800 text-sm"
+            onClick={() => setSummary(initialSummary)}
+            title="Régénérer la synthèse"
+          >
+            Régénérer la synthèse
+          </button>
+          <button
+            className="px-3 py-1 rounded bg-slate-200 text-slate-800 text-sm"
+            onClick={copySummary}
+          >
+            Copier le texte
+          </button>
+          <button
+            className="px-3 py-1 rounded bg-indigo-600 text-white text-sm"
+            onClick={exportPDF}
+          >
+            Télécharger en PDF
+          </button>
+        </div>
       </div>
 
-      {showLink && (
-        <div className="mt-2 text-[11px] break-all leading-snug">
-          {url || ""}
-        </div>
-      )}
+      {/* Compteurs */}
+      <div className="flex flex-wrap gap-2 text-sm">
+        <Badge label="Étiquettes" value={counts.total} />
+        <Badge label="Liens" value={counts.links} />
+        <Badge label="Dans l'arbre" value={counts.inTree} />
+        <Badge label="Hors arbre" value={counts.offTree} />
+        <Badge label="Problèmes" value={counts.cats.problem} />
+        <Badge label="Causes" value={counts.cats.causes} />
+        <Badge label="Conséquences" value={counts.cats.consequences} />
+      </div>
+
+      {/* Graphiques */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Card title="Répartition par catégories">
+          <div style={{ height: 280 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={categoryData}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={50}
+                  outerRadius={90}
+                  stroke="#222"
+                  strokeWidth={1}
+                  label
+                >
+                  {categoryData.map((_, i) => (
+                    <Cell key={i} />
+                  ))}
+                </Pie>
+                <Legend />
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+
+        <Card title="Nœuds les plus connectés (degré)">
+          <div style={{ height: 280 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={barData} margin={{ top: 8, right: 12, left: 0, bottom: 26 }}>
+                <XAxis dataKey="label" interval={0} angle={-20} textAnchor="end" height={50} />
+                <YAxis allowDecimals={false} />
+                <Tooltip />
+                <Bar dataKey="Degré" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      </div>
+
+      {/* Chaînes détectées */}
+      <Card title="Chaînes cause → … → conséquence (exemples)">
+        {sampleChains.length ? (
+          <ul className="list-disc pl-5 space-y-1 text-sm">
+            {sampleChains.map((ch, i) => (
+              <li key={i}>{ch.map(trimTxt).join(" → ")}</li>
+            ))}
+          </ul>
+        ) : (
+          <div className="text-sm text-slate-600">
+            Aucune chaîne détectée pour le moment (ou éléments non reliés).
+          </div>
+        )}
+      </Card>
+
+      {/* Synthèse IA locale (éditable) */}
+      <div className="space-y-2">
+        <div className="font-semibold">Synthèse IA (éditable)</div>
+        <textarea
+          className="w-full h-[420px] p-3 border rounded font-mono text-sm leading-5"
+          value={summary}
+          onChange={(e) => setSummary(e.target.value)}
+        />
+      </div>
     </div>
   );
+}
+
+/* ===================== Petits composants UI ===================== */
+
+function Badge({ label, value }) {
+  return (
+    <div className="px-2.5 py-1 rounded border bg-white shadow-sm">
+      <span className="text-slate-500">{label} :</span>{" "}
+      <span className="font-bold">{value}</span>
+    </div>
+  );
+}
+
+function Card({ title, children }) {
+  return (
+    <div className="bg-white border rounded shadow-sm p-3">
+      <div className="font-semibold mb-2">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function trimTxt(s, n = 60) {
+  const t = (s || "").trim();
+  return t.length > n ? t.slice(0, n - 1) + "…" : t;
 }
