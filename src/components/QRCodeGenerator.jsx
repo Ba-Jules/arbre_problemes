@@ -3,12 +3,12 @@ import React, { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 /**
- * Génère un QR en <canvas> (sans texte surimprimé).
- * Le lien est affiché *sous* le QR (jamais par-dessus).
+ * Génère un QR en <canvas> sans texte par-dessus.
+ * Le lien est affiché *sous* le QR uniquement.
  */
 export default function QRCodeGenerator({
   url,
-  size = 60,          // petit et lisible (ex-120 -> /2 ou /4 selon besoin)
+  size = 120,        // 120px par défaut pour une bonne scannabilité
   title = "QR participants",
   className = "",
   showLink = true,
@@ -24,24 +24,31 @@ export default function QRCodeGenerator({
       const canvas = canvasRef.current;
       if (!canvas) return;
 
+      // IMPORTANT : on force une largeur fixe
       const opts = {
         errorCorrectionLevel: "M",
         margin: 1,
-        scale: 8,
+        width: size, // <-- la lib dimensionne le canvas selon cette largeur
         color: { dark: "#000000", light: "#ffffff" },
       };
 
       try {
         await QRCode.toCanvas(canvas, url || "", opts);
         if (cancelled) return;
+
+        // Ajuste l'affichage CSS exactement à "size"
+        canvas.style.width = `${size}px`;
+        canvas.style.height = `${size}px`;
       } catch (e) {
         if (!cancelled) setError(e?.message || "Impossible de générer le QR");
       }
     }
 
     render();
-    return () => { cancelled = true; };
-  }, [url]);
+    return () => {
+      cancelled = true;
+    };
+  }, [url, size]);
 
   const handleDownload = () => {
     const canvas = canvasRef.current;
@@ -83,6 +90,7 @@ export default function QRCodeGenerator({
         </div>
       </div>
 
+      {/* Même taille que le canvas, pas de rognage */}
       <div
         className="relative overflow-hidden bg-white border rounded p-2 flex items-center justify-center"
         style={{ width: size + 16, height: size + 16 }}
@@ -98,9 +106,6 @@ export default function QRCodeGenerator({
         ) : (
           <canvas
             ref={canvasRef}
-            width={size}
-            height={size}
-            style={{ width: size, height: size }}
             aria-label="QR code participants"
           />
         )}
