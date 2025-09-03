@@ -2,6 +2,25 @@ import React, { useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Play, X, QrCode } from "lucide-react";
 import QRCodeGenerator from "./QRCodeGenerator";
 
+/* ---------- Utilitaire image avec fallbacks ----------- */
+function SmartImage({ sources = [], alt = "", className = "" }) {
+  const [idx, setIdx] = useState(0);
+  if (!sources.length) return null;
+  const src = sources[Math.min(idx, sources.length - 1)];
+  return (
+    // eslint-disable-next-line jsx-a11y/alt-text
+    <img
+      src={src}
+      alt={alt}
+      className={className}
+      loading="lazy"
+      decoding="async"
+      crossOrigin="anonymous"
+      onError={() => setIdx((i) => i + 1)}
+    />
+  );
+}
+
 const ArbreProblemePresentation = ({
   sessionId,
   onComplete,
@@ -20,13 +39,25 @@ const ArbreProblemePresentation = ({
     return url.toString();
   }, [sessionId]);
 
-  // Médias hébergés sur ton ancien repo GitHub
-  const GITHUB_BASE =
-    "https://raw.githubusercontent.com/Ba-Jules/new-collaborative-tools/main/public";
+  // Base vers TON ancien repo
+  const RAW_BASE =
+    "https://raw.githubusercontent.com/Ba-Jules/new-collaborative-tools/main";
 
-  const VIDEO_URL = `${GITHUB_BASE}/Arbre-Problemes-presentation.mp4`;
-  const IMG_PROBLEME = `${GITHUB_BASE}/arbre_probleme.JPG`;
-  const IMG_OBJECTIFS = `${GITHUB_BASE}/arbre_objectifs_exemple.JPG`;
+  // Fallbacks probables vus dans tes captures (public/ ET dist/)
+  const VIDEO_SOURCES = [
+    `${RAW_BASE}/public/videos/Arbre-Problemes-presentation.mp4`,
+    `${RAW_BASE}/dist/videos/Arbre-Problemes-presentation.mp4`,
+  ];
+  const IMG_PROBLEME_SOURCES = [
+    `${RAW_BASE}/public/arbre_probleme.JPG`,
+    `${RAW_BASE}/dist/arbre_probleme.JPG`,
+    `${RAW_BASE}/public/images/arbre_probleme.JPG`,
+  ];
+  const IMG_OBJECTIFS_SOURCES = [
+    `${RAW_BASE}/public/arbre_objectifs_exemple.JPG`,
+    `${RAW_BASE}/dist/arbre_objectifs_exemple.JPG`,
+    `${RAW_BASE}/public/images/arbre_objectifs_exemple.JPG`,
+  ];
 
   const slides = [
     {
@@ -62,7 +93,7 @@ const ArbreProblemePresentation = ({
             </div>
           </div>
 
-          {/* Unique bouton vidéo ici */}
+          {/* Unique bouton vidéo */}
           <div className="flex justify-center">
             <button
               className="inline-flex items-center px-4 py-2 rounded-lg border border-gray-300 text-sm font-semibold text-gray-800 bg-white hover:bg-gray-50"
@@ -86,14 +117,10 @@ const ArbreProblemePresentation = ({
           </p>
 
           <div className="rounded-xl overflow-hidden border border-gray-200 bg-white shadow-sm">
-            <img
-              src={IMG_PROBLEME}
+            <SmartImage
+              sources={IMG_PROBLEME_SOURCES}
               alt="Schéma de structure de l'Arbre à Problèmes"
               className="w-full h-auto"
-              loading="lazy"
-              decoding="async"
-              fetchpriority="low"
-              crossOrigin="anonymous"
             />
           </div>
 
@@ -132,13 +159,10 @@ const ArbreProblemePresentation = ({
               mesurable : c’est la base de l’<em>arbre à objectifs</em>.
             </p>
             <div className="rounded-lg overflow-hidden border border-gray-200">
-              <img
-                src={IMG_OBJECTIFS}
+              <SmartImage
+                sources={IMG_OBJECTIFS_SOURCES}
                 alt="Exemple d'arbre à objectifs"
                 className="w-full h-auto"
-                loading="lazy"
-                decoding="async"
-                crossOrigin="anonymous"
               />
             </div>
           </div>
@@ -162,6 +186,8 @@ const ArbreProblemePresentation = ({
                 </span>
                 <input
                   type="text"
+                  name="projectName"
+                  id="projectName"
                   className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-900/10"
                   value={projectName}
                   onChange={(e) => setProjectName(e.target.value)}
@@ -175,6 +201,8 @@ const ArbreProblemePresentation = ({
                 </span>
                 <input
                   type="text"
+                  name="theme"
+                  id="theme"
                   className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-900/10"
                   value={theme}
                   onChange={(e) => setTheme(e.target.value)}
@@ -238,7 +266,7 @@ const ArbreProblemePresentation = ({
     <div className="max-w-6xl mx-auto p-4 md:p-8">
       <div className="bg-white rounded-2xl shadow-2xl ring-1 ring-gray-100 overflow-hidden">
         <div className="p-5 md:p-8">
-          {/* En-tête : on supprime le bouton Vidéo global pour n'en garder qu'un (dans l'intro) */}
+          {/* En-tête : on ne garde PAS le bouton vidéo ici */}
           <div className="flex justify-between items-center mb-6 md:mb-8">
             <h2 className="text-2xl md:text-4xl font-black tracking-tight text-gray-900">
               {slides[currentSlide].title}
@@ -310,23 +338,23 @@ const ArbreProblemePresentation = ({
                   preload="metadata"
                   crossOrigin="anonymous"
                 >
-                  <source src={VIDEO_URL} type="video/mp4" />
-                  Votre navigateur ne supporte pas la lecture de vidéos.
+                  {/* Le navigateur essaiera chaque source dans l'ordre */}
+                  {VIDEO_SOURCES.map((src) => (
+                    <source key={src} src={src} type="video/mp4" />
+                  ))}
                 </video>
               </div>
 
-              {/* Lien direct (secours si un bloqueur/extension empêche le lecteur) */}
+              {/* Lien direct (secours) */}
               <div className="mt-3 text-sm text-gray-600 text-center">
-                Présentation détaillée de l’Arbre à Problèmes —{" "}
                 <a
-                  href={VIDEO_URL}
+                  href={VIDEO_SOURCES[0]}
                   target="_blank"
                   rel="noreferrer"
                   className="underline"
                 >
-                  ouvrir la vidéo dans un nouvel onglet
+                  Ouvrir la vidéo dans un nouvel onglet
                 </a>
-                .
               </div>
             </div>
           </div>
