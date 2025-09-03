@@ -1,3 +1,4 @@
+// src/components/AnalysisPanel.jsx
 import React, {
   useCallback,
   useEffect,
@@ -16,19 +17,14 @@ import {
   Pie,
   Cell,
   Legend,
+  CartesianGrid,
 } from "recharts";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 
 /**
- * Panneau d'analyse (nouvel onglet).
- * Affiche métriques, graphiques, et une synthèse IA locale éditable.
- *
- * Props :
- * - sessionId
- * - postIts: [{id, content, author, category, isInTree, x, y, color}]
- * - connections: [{id, fromId, toId}]
- * - projectName, theme
+ * Panneau d'analyse (ouvre dans un nouvel onglet).
+ * Affiche métriques, graphiques colorés et synthèse IA locale (éditable).
  */
 export default function AnalysisPanel({
   sessionId,
@@ -39,6 +35,18 @@ export default function AnalysisPanel({
 }) {
   const containerRef = useRef(null);
 
+  /* ===================== Couleurs (cohérentes avec l'appli) ===================== */
+  const COLORS = {
+    problem: "#ef4444",       // rouge
+    causes: "#fb7185",        // saumon
+    consequences: "#22c55e",  // vert
+    inTree: "#0ea5e9",        // bleu clair
+    offTree: "#94a3b8",       // gris ardoise
+    bars: "#6366f1",          // indigo
+    bars2: "#f59e0b",         // amber
+    stroke: "#111827",        // presque noir
+  };
+
   /* ===================== Pré-calculs ===================== */
 
   const byId = useMemo(
@@ -47,20 +55,17 @@ export default function AnalysisPanel({
   );
 
   const graph = useMemo(() => {
-    const inMap = new Map();  // nodeId -> parents[]
-    const outMap = new Map(); // nodeId -> children[]
-
+    const inMap = new Map();
+    const outMap = new Map();
     postIts.forEach((p) => {
       inMap.set(p.id, []);
       outMap.set(p.id, []);
     });
-
     connections.forEach((c) => {
       if (!byId[c.fromId] || !byId[c.toId]) return;
       outMap.get(c.fromId)?.push(c.toId);
       inMap.get(c.toId)?.push(c.fromId);
     });
-
     return { inMap, outMap };
   }, [postIts, connections, byId]);
 
@@ -70,7 +75,7 @@ export default function AnalysisPanel({
       const outdeg = graph.outMap.get(p.id)?.length || 0;
       return {
         id: p.id,
-        label: (p.content || "").slice(0, 32) || "(sans texte)",
+        label: (p.content || "").slice(0, 40) || "(sans texte)",
         indeg,
         outdeg,
         deg: indeg + outdeg,
@@ -78,11 +83,25 @@ export default function AnalysisPanel({
         category: p.category || "problem",
       };
     });
+
     const top = rows
       .filter((r) => r.isInTree)
       .sort((a, b) => b.deg - a.deg)
       .slice(0, 8);
-    return { rows, top };
+
+    // Totaux entrées/sorties par catégorie (pour le graphe 4)
+    const sumCat = {
+      problem: { indeg: 0, outdeg: 0 },
+      causes: { indeg: 0, outdeg: 0 },
+      consequences: { indeg: 0, outdeg: 0 },
+    };
+    rows.forEach((r) => {
+      if (!sumCat[r.category]) return;
+      sumCat[r.category].indeg += r.indeg;
+      sumCat[r.category].outdeg += r.outdeg;
+    });
+
+    return { rows, top, sumCat };
   }, [postIts, graph]);
 
   const counts = useMemo(() => {
@@ -97,7 +116,6 @@ export default function AnalysisPanel({
       consequences: postIts.filter((p) => p.category === "consequences").length,
     };
 
-    // Entrées = nœuds inTree sans parents ; Sorties = nœuds inTree sans enfants
     const roots = postIts.filter(
       (p) => p.isInTree && (graph.inMap.get(p.id)?.length || 0) === 0
     );
@@ -105,12 +123,23 @@ export default function AnalysisPanel({
       (p) => p.isInTree && (graph.outMap.get(p.id)?.length || 0) === 0
     );
 
-    // Isolés = inTree avec deg = 0
     const isolated = postIts.filter((p) => {
       if (!p.isInTree) return false;
       const indeg = graph.inMap.get(p.id)?.length || 0;
       const outdeg = graph.outMap.get(p.id)?.length || 0;
       return indeg + outdeg === 0;
+    });
+
+    // Dans/Hors arbre par catégorie (pour graphe 2)
+    const inOutByCat = ["problem", "causes", "consequences"].map((cat) => {
+      const totalCat = postIts.filter((p) => p.category === cat).length;
+      const inCat = postIts.filter((p) => p.category === cat && p.isInTree).length;
+      return {
+        name: displayCat(cat),
+        "Dans l'arbre": inCat,
+        "Hors arbre": Math.max(0, totalCat - inCat),
+        _cat: cat,
+      };
     });
 
     return {
@@ -122,33 +151,40 @@ export default function AnalysisPanel({
       roots,
       leaves,
       isolated,
+      inOutByCat,
     };
   }, [postIts, connections, graph]);
 
-  /* ===================== Graphiques ===================== */
+  /* ===================== Données graphiques ===================== */
 
   const categoryData = useMemo(
     () => [
-      { name: "Problèmes", value: counts.cats.problem },
-      { name: "Causes", value: counts.cats.causes },
-      { name: "Conséquences", value: counts.cats.consequences },
+      { name: "Problèmes", value: counts.cats.problem, color: COLORS.problem },
+      { name: "Causes", value: counts.cats.causes, color: COLORS.causes },
+      { name: "Conséquences", value: counts.cats.consequences, color: COLORS.consequences },
     ],
-    [counts]
+    [counts, COLORS]
   );
 
-  const barData = useMemo(() => {
-    // Top nœuds par degré (dans l'arbre)
+  const barTopNodes = useMemo(() => {
     return degreeStats.top.map((r) => ({
       label: r.label,
       Degré: r.deg,
     }));
   }, [degreeStats]);
 
+  const indegOutdegByCat = useMemo(() => {
+    const s = degreeStats.sumCat;
+    return [
+      { name: "Problèmes", Entrées: s.problem.indeg, Sorties: s.problem.outdeg, _cat: "problem" },
+      { name: "Causes", Entrées: s.causes.indeg, Sorties: s.causes.outdeg, _cat: "causes" },
+      { name: "Conséquences", Entrées: s.consequences.indeg, Sorties: s.consequences.outdeg, _cat: "consequences" },
+    ];
+  }, [degreeStats]);
+
   /* ===================== Chaînes cause → … → conséquence ===================== */
 
   const sampleChains = useMemo(() => {
-    // Petite recherche de chemins (longueur <= 4) partant d'une cause vers une conséquence,
-    // en passant éventuellement par un problème.
     const chains = [];
     const maxLen = 4;
 
@@ -176,7 +212,6 @@ export default function AnalysisPanel({
       .filter((p) => p.isInTree && p.category === "causes")
       .forEach((p) => dfs([p.id]));
 
-    // On renvoie 5 chaînes max pour lecture
     return chains.slice(0, 5).map((ids) => ids.map((id) => byId[id]?.content || "(?)"));
   }, [postIts, graph, byId]);
 
@@ -198,7 +233,6 @@ export default function AnalysisPanel({
     );
     lines.push("");
 
-    // Nœuds structurants
     if (degreeStats.top.length) {
       lines.push("Points structurants (nœuds les plus connectés) :");
       degreeStats.top.forEach((n) =>
@@ -209,7 +243,6 @@ export default function AnalysisPanel({
     }
     lines.push("");
 
-    // Racines & feuilles
     if (counts.roots.length) {
       lines.push("Entrées majeures (sans parents) :");
       counts.roots.slice(0, 6).forEach((p) =>
@@ -239,11 +272,8 @@ export default function AnalysisPanel({
     }
     lines.push("");
 
-    // Chaînes
     if (sampleChains.length) {
-      lines.push(
-        "Chaînes « cause → … → conséquence » (exemples) :"
-      );
+      lines.push("Chaînes « cause → … → conséquence » (exemples) :");
       sampleChains.forEach((ch, i) => {
         lines.push(`- Chaîne ${i + 1} : ${ch.map(trimTxt).join(" → ")}`);
       });
@@ -254,7 +284,7 @@ export default function AnalysisPanel({
     }
     lines.push("");
 
-    // Recommandations heuristiques
+    // Recos heuristiques
     lines.push("Recommandations (heuristiques) :");
     if (counts.isolated.length) {
       lines.push(
@@ -282,9 +312,7 @@ export default function AnalysisPanel({
   }, [counts, degreeStats, sampleChains]);
 
   const [summary, setSummary] = useState(initialSummary);
-  useEffect(() => {
-    setSummary(initialSummary);
-  }, [initialSummary]);
+  useEffect(() => setSummary(initialSummary), [initialSummary]);
 
   /* ===================== Actions ===================== */
 
@@ -293,7 +321,6 @@ export default function AnalysisPanel({
       await navigator.clipboard.writeText(summary);
       alert("Texte copié ✅");
     } catch {
-      // fallback
       window.prompt("Copiez le texte :", summary);
     }
   }, [summary]);
@@ -301,8 +328,6 @@ export default function AnalysisPanel({
   const exportPDF = useCallback(async () => {
     const node = containerRef.current;
     if (!node) return;
-
-    // Capture propre
     const canvas = await html2canvas(node, {
       scale: 2.5,
       backgroundColor: "#ffffff",
@@ -311,8 +336,6 @@ export default function AnalysisPanel({
     });
     const imgData = canvas.toDataURL("image/png");
     const pdf = new jsPDF("p", "mm", "a4");
-
-    // Fit dans la page
     const pageW = pdf.internal.pageSize.getWidth();
     const pageH = pdf.internal.pageSize.getHeight();
     const ratio = Math.min(pageW / canvas.width, pageH / canvas.height);
@@ -320,7 +343,6 @@ export default function AnalysisPanel({
     const h = canvas.height * ratio;
     const x = (pageW - w) / 2;
     const y = (pageH - h) / 2;
-
     pdf.addImage(imgData, "PNG", x, y, w, h);
     pdf.save(`analyse-${sessionId}.pdf`);
   }, [sessionId]);
@@ -340,12 +362,10 @@ export default function AnalysisPanel({
             {theme ? " — " + theme : ""}
           </div>
         )}
-
         <div className="ml-auto flex items-center gap-2">
           <button
             className="px-3 py-1 rounded bg-slate-200 text-slate-800 text-sm"
             onClick={() => setSummary(initialSummary)}
-            title="Régénérer la synthèse"
           >
             Régénérer la synthèse
           </button>
@@ -375,10 +395,11 @@ export default function AnalysisPanel({
         <Badge label="Conséquences" value={counts.cats.consequences} />
       </div>
 
-      {/* Graphiques */}
+      {/* Graphiques (4) */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* 1. Répartition par catégories */}
         <Card title="Répartition par catégories">
-          <div style={{ height: 280 }}>
+          <div style={{ height: 300 }}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -386,13 +407,13 @@ export default function AnalysisPanel({
                   dataKey="value"
                   nameKey="name"
                   innerRadius={50}
-                  outerRadius={90}
-                  stroke="#222"
+                  outerRadius={95}
+                  stroke={COLORS.stroke}
                   strokeWidth={1}
                   label
                 >
-                  {categoryData.map((_, i) => (
-                    <Cell key={i} />
+                  {categoryData.map((d, i) => (
+                    <Cell key={i} fill={d.color} />
                   ))}
                 </Pie>
                 <Legend />
@@ -402,14 +423,56 @@ export default function AnalysisPanel({
           </div>
         </Card>
 
-        <Card title="Nœuds les plus connectés (degré)">
-          <div style={{ height: 280 }}>
+        {/* 2. Dans/Hors arbre par catégorie */}
+        <Card title="Dans l'arbre vs Hors arbre (par catégorie)">
+          <div style={{ height: 300 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={barData} margin={{ top: 8, right: 12, left: 0, bottom: 26 }}>
-                <XAxis dataKey="label" interval={0} angle={-20} textAnchor="end" height={50} />
+              <BarChart
+                data={counts.inOutByCat}
+                margin={{ top: 12, right: 12, left: 0, bottom: 24 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" />
                 <YAxis allowDecimals={false} />
                 <Tooltip />
-                <Bar dataKey="Degré" />
+                <Legend />
+                <Bar dataKey="Dans l'arbre" stackId="a" fill={COLORS.inTree} />
+                <Bar dataKey="Hors arbre" stackId="a" fill={COLORS.offTree} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+
+        {/* 3. Top nœuds par degré */}
+        <Card title="Nœuds les plus connectés (degré)">
+          <div style={{ height: 300 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={barTopNodes} margin={{ top: 12, right: 12, left: 0, bottom: 40 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="label" interval={0} angle={-20} textAnchor="end" height={60} />
+                <YAxis allowDecimals={false} />
+                <Tooltip />
+                <Bar dataKey="Degré" fill={COLORS.bars} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+
+        {/* 4. Entrées vs Sorties par catégorie */}
+        <Card title="Entrées (parents) vs Sorties (enfants) par catégorie">
+          <div style={{ height: 300 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={indegOutdegByCat}
+                margin={{ top: 12, right: 12, left: 0, bottom: 24 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" />
+                <YAxis allowDecimals={false} />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="Entrées" fill={COLORS.bars2} />
+                <Bar dataKey="Sorties" fill={COLORS.bars} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -467,4 +530,11 @@ function Card({ title, children }) {
 function trimTxt(s, n = 60) {
   const t = (s || "").trim();
   return t.length > n ? t.slice(0, n - 1) + "…" : t;
+}
+
+function displayCat(cat) {
+  if (cat === "problem") return "Problèmes";
+  if (cat === "causes") return "Causes";
+  if (cat === "consequences") return "Conséquences";
+  return cat;
 }
