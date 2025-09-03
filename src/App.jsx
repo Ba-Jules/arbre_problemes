@@ -90,7 +90,6 @@ export default function App() {
   const [theme, setTheme] = useState("");
 
   const [showQR, setShowQR] = useState(false);
-
   const [showPresentation, setShowPresentation] = useState(false);
 
   /* -------- Participant -------- */
@@ -110,6 +109,10 @@ export default function App() {
 
   /* -------- Analyse autonome (via URL) -------- */
   const [standaloneAnalysis, setStandaloneAnalysis] = useState(false);
+
+  /* -------- Export (PDF/PNG) -------- */
+  const [exportMode, setExportMode] = useState(false); // active le rendu sans clamp + hauteurs dynamiques
+  const postItRefs = useRef({}); // id -> DOM node pour mesurer la hauteur en export
 
   /* -------- Refs -------- */
   const treeAreaRef = useRef(null);
@@ -337,7 +340,7 @@ export default function App() {
           : p.y + POSTIT_H + gap;
 
       const newId = await addPostItToFirebase(
-        "Nouvelle étiquette",
+        "Nouvelle étiquette qui comporte\nplusieurs lignes si besoin",
         newCat,
         "Modérateur",
         newX,
@@ -468,6 +471,16 @@ export default function App() {
 
   /* ========================= Connexions (SVG) ========================= */
 
+  const getNodeHeight = (id) => {
+    // En export, on mesure la vraie hauteur DOM (divisée par le zoom),
+    // sinon on garde la hauteur fixe.
+    if (exportMode && postItRefs.current[id]) {
+      const rect = postItRefs.current[id].getBoundingClientRect();
+      return rect.height / (zoom || 1);
+    }
+    return POSTIT_H;
+  };
+
   const renderConnections = () => {
     const byId = Object.fromEntries(postIts.map((p) => [p.id, p]));
     const items = [];
@@ -477,10 +490,13 @@ export default function App() {
       const b = byId[c.toId];
       if (!a || !b) return;
 
+      const aH = getNodeHeight(a.id);
+      const bH = getNodeHeight(b.id);
+
       const x1 = (a.x || 0) + POSTIT_W / 2;
-      const y1 = (a.y || 0) + POSTIT_H / 2;
+      const y1 = (a.y || 0) + aH / 2;
       const x2 = (b.x || 0) + POSTIT_W / 2;
-      const y2 = (b.y || 0) + POSTIT_H / 2;
+      const y2 = (b.y || 0) + bH / 2;
 
       const midY = y1 + (y2 - y1) / 2;
       const d = `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
@@ -501,7 +517,7 @@ export default function App() {
             strokeLinejoin="round"
             style={{ pointerEvents: "none" }}
           />
-          {mode === "moderator" && (
+          {mode === "moderator" && !exportMode && (
             <g
               transform={`translate(${cx}, ${cy})`}
               style={{ cursor: "pointer" }}
@@ -571,6 +587,8 @@ export default function App() {
     return (
       <div
         key={p.id}
+        id={`postit-${p.id}`}
+        ref={(el) => { if (el) postItRefs.current[p.id] = el; }}
         className={`absolute select-none transition-transform ${
           isConnecting ? "cursor-pointer" : paintMode ? "cursor-crosshair" : "cursor-move"
         } ${isSource ? "ring-4 ring-blue-400" : ""}`}
@@ -578,7 +596,7 @@ export default function App() {
           left: p.x,
           top: p.y,
           width: POSTIT_W,
-          height: POSTIT_H,
+          height: exportMode ? "auto" : POSTIT_H, // ← auto pendant l'export
           transform: `translateZ(0)`,
           zIndex: 3,
         }}
@@ -597,8 +615,8 @@ export default function App() {
             textRendering: "optimizeLegibility",
           }}
         >
-          {/* + haut et + bas – SUR le post-it, sans cercle, collés aux bords */}
-          {mode === "moderator" && !isConnecting && (
+          {/* + haut et + bas – sur le post-it, sans cercle, collés aux bords (masqués en export) */}
+          {mode === "moderator" && !isConnecting && !exportMode && (
             <>
               <button
                 type="button"
@@ -630,8 +648,8 @@ export default function App() {
             </>
           )}
 
-          {/* Actions coin */}
-          {mode === "moderator" && !isConnecting && !paintMode && (
+          {/* Actions coin (masquées en export) */}
+          {mode === "moderator" && !isConnecting && !paintMode && !exportMode && (
             <div className="absolute -top-1 -right-1 flex gap-1">
               <button
                 type="button"
@@ -675,13 +693,17 @@ export default function App() {
             </div>
           )}
 
-          {/* Texte principal */}
-          <div className="font-extrabold text-[16px] break-words whitespace-normal max-h-[54px] overflow-hidden pr-6">
+          {/* Texte principal : clampé à l'écran, libéré en export */}
+          <div
+            className={`font-extrabold text-[16px] break-words whitespace-pre-wrap pr-6 ${
+              exportMode ? "" : "max-h-[54px] overflow-hidden"
+            }`}
+          >
             {p.content}
           </div>
 
-          {/* Auteur : masqué par défaut, visible au survol (n’apparaît pas à l’impression) */}
-          <div className="absolute left-2 bottom-1 text-[11px] text-black/80 bg-white/85 rounded px-1 leading-4 border border-black/10 opacity-0 group-hover:opacity-100 pointer-events-none print:hidden">
+          {/* Auteur : masqué en impression ET en export */}
+          <div className={`absolute left-2 bottom-1 text-[11px] text-black/80 bg-white/85 rounded px-1 leading-4 border border-black/10 ${exportMode ? "hidden" : "opacity-0 group-hover:opacity-100"} pointer-events-none print:hidden`}>
             {p.author}
           </div>
         </div>
@@ -864,13 +886,24 @@ export default function App() {
     setZoom(factor || 1);
   };
 
-  /* >>> Export PDF : capture nette (zoom neutralisé + scale 3) */
+  /* >>> Export PDF/PNG : enlève le clamp + recalcule les flèches */
+  const waitNextFrame = () =>
+    new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+  const beforeCapture = async () => {
+    setExportMode(true);
+    await waitNextFrame(); // laisse le temps au DOM de s'adapter
+  };
+  const afterCapture = () => setExportMode(false);
+
   const exportTreeAsPDF = async () => {
     const node = treeAreaRef.current;
     if (!node) return;
+
     const prevTransform = node.style.transform;
     try {
-      node.style.transform = "scale(1)"; // neutraliser le zoom pour la capture
+      await beforeCapture();
+      node.style.transform = "scale(1)";
       const canvas = await html2canvas(node, {
         scale: 3,
         backgroundColor: "#ffffff",
@@ -890,15 +923,17 @@ export default function App() {
       pdf.save(`arbre-${sessionId}.pdf`);
     } finally {
       node.style.transform = prevTransform || "";
+      afterCapture();
     }
   };
 
-  /* >>> Export PNG HD */
   const exportTreeAsPNG = async () => {
     const node = treeAreaRef.current;
     if (!node) return;
+
     const prevTransform = node.style.transform;
     try {
+      await beforeCapture();
       node.style.transform = "scale(1)";
       const canvas = await html2canvas(node, {
         scale: 3,
@@ -913,6 +948,7 @@ export default function App() {
       a.click();
     } finally {
       node.style.transform = prevTransform || "";
+      afterCapture();
     }
   };
 
@@ -969,7 +1005,7 @@ export default function App() {
             onMouseDown={(e) => handleMouseDown(e, p.id)}
             title={paintMode ? "Cliquez pour appliquer la couleur" : `Glissez vers l'arbre (${title})`}
           >
-            <div className="font-extrabold text-sm break-words">
+            <div className="font-extrabold text-sm break-words whitespace-pre-wrap">
               {p.content}
             </div>
 
