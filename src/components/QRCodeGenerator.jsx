@@ -1,3 +1,5 @@
+--- START OF FILE QRCodeGenerator.jsx ---
+
 import React, { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
@@ -7,7 +9,7 @@ import QRCode from "qrcode";
  */
 export default function QRCodeGenerator({
   url,
-  size = 120,          // plus petit par défaut
+  size = 60,          // Taille divisée par 4 (anciennement 120)
   title = "QR participants",
   className = "",
   showLink = true,
@@ -106,7 +108,7 @@ export default function QRCodeGenerator({
       </div>
 
       {showLink && (
-        <div className="mt-2 text-[11px] break-all leading-snug">
+        <div className="mt-2 text-[11px] break-all leading-snug text-gray-700 p-2 border rounded bg-gray-50">
           {url || ""}
         </div>
       )}
