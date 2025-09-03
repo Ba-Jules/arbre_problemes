@@ -1,15 +1,14 @@
---- START OF FILE QRCodeGenerator.jsx ---
-
+// src/components/QRCodeGenerator.jsx
 import React, { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 /**
- * Génère un QR en <canvas> (sans aucun texte par-dessus).
- * Le lien est affiché *sous* le QR (jamais surimprimé).
+ * Génère un QR en <canvas> (sans texte surimprimé).
+ * Le lien est affiché *sous* le QR (jamais par-dessus).
  */
 export default function QRCodeGenerator({
   url,
-  size = 60,          // Taille divisée par 4 (anciennement 120)
+  size = 60,          // petit et lisible (ex-120 -> /2 ou /4 selon besoin)
   title = "QR participants",
   className = "",
   showLink = true,
@@ -85,7 +84,7 @@ export default function QRCodeGenerator({
       </div>
 
       <div
-        className="bg-white border rounded p-2 flex items-center justify-center"
+        className="relative overflow-hidden bg-white border rounded p-2 flex items-center justify-center"
         style={{ width: size + 16, height: size + 16 }}
       >
         {error ? (
