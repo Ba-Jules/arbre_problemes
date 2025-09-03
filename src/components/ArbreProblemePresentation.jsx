@@ -8,7 +8,6 @@ function SmartImage({ sources = [], alt = "", className = "" }) {
   if (!sources.length) return null;
   const src = sources[Math.min(idx, sources.length - 1)];
   return (
-    // eslint-disable-next-line jsx-a11y/alt-text
     <img
       src={src}
       alt={alt}
@@ -43,20 +42,18 @@ const ArbreProblemePresentation = ({
   const RAW_BASE =
     "https://raw.githubusercontent.com/Ba-Jules/new-collaborative-tools/main";
 
-  // Fallbacks probables vus dans tes captures (public/ ET dist/)
+  // Emplacements exacts (selon ta capture) + fallback dist/videos
   const VIDEO_SOURCES = [
     `${RAW_BASE}/public/videos/Arbre-Problemes-presentation.mp4`,
     `${RAW_BASE}/dist/videos/Arbre-Problemes-presentation.mp4`,
   ];
   const IMG_PROBLEME_SOURCES = [
-    `${RAW_BASE}/public/arbre_probleme.JPG`,
-    `${RAW_BASE}/dist/arbre_probleme.JPG`,
-    `${RAW_BASE}/public/images/arbre_probleme.JPG`,
+    `${RAW_BASE}/public/videos/arbre_probleme.JPG`,
+    `${RAW_BASE}/dist/videos/arbre_probleme.JPG`,
   ];
   const IMG_OBJECTIFS_SOURCES = [
-    `${RAW_BASE}/public/arbre_objectifs_exemple.JPG`,
-    `${RAW_BASE}/dist/arbre_objectifs_exemple.JPG`,
-    `${RAW_BASE}/public/images/arbre_objectifs_exemple.JPG`,
+    `${RAW_BASE}/public/videos/arbre_objectifs_exemple.JPG`,
+    `${RAW_BASE}/dist/videos/arbre_objectifs_exemple.JPG`,
   ];
 
   const slides = [
@@ -266,7 +263,7 @@ const ArbreProblemePresentation = ({
     <div className="max-w-6xl mx-auto p-4 md:p-8">
       <div className="bg-white rounded-2xl shadow-2xl ring-1 ring-gray-100 overflow-hidden">
         <div className="p-5 md:p-8">
-          {/* En-tête : on ne garde PAS le bouton vidéo ici */}
+          {/* En-tête : pas de bouton vidéo global */}
           <div className="flex justify-between items-center mb-6 md:mb-8">
             <h2 className="text-2xl md:text-4xl font-black tracking-tight text-gray-900">
               {slides[currentSlide].title}
@@ -338,14 +335,12 @@ const ArbreProblemePresentation = ({
                   preload="metadata"
                   crossOrigin="anonymous"
                 >
-                  {/* Le navigateur essaiera chaque source dans l'ordre */}
                   {VIDEO_SOURCES.map((src) => (
                     <source key={src} src={src} type="video/mp4" />
                   ))}
                 </video>
               </div>
 
-              {/* Lien direct (secours) */}
               <div className="mt-3 text-sm text-gray-600 text-center">
                 <a
                   href={VIDEO_SOURCES[0]}
