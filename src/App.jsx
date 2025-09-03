@@ -584,48 +584,52 @@ export default function App() {
         }}
         onMouseDown={(e) => handleMouseDown(e, p.id)}
       >
-        {/* + discrets haut/bas — petits ronds noirs SUR le post-it */}
-        {mode === "moderator" && !isConnecting && (
-          <>
-            <button
-              type="button"
-              className="absolute left-1/2 -translate-x-1/2 top-1 w-5 h-5 rounded-full bg-black text-white text-[12px] leading-[18px] shadow"
-              title="Ajouter & relier (au-dessus)"
-              onMouseDown={(ev)=>{ev.preventDefault();ev.stopPropagation();}}
-              onClick={(ev) => {
-                ev.stopPropagation();
-                createLinkedPostIt(p, "up");
-              }}
-            >
-              +
-            </button>
-            <button
-              type="button"
-              className="absolute left-1/2 -translate-x-1/2 bottom-1 w-5 h-5 rounded-full bg-black text-white text-[12px] leading-[18px] shadow"
-              title="Ajouter & relier (au-dessous)"
-              onMouseDown={(ev)=>{ev.preventDefault();ev.stopPropagation();}}
-              onClick={(ev) => {
-                ev.stopPropagation();
-                createLinkedPostIt(p, "down");
-              }}
-            >
-              +
-            </button>
-          </>
-        )}
-
+        {/* Conteneur coloré du post-it */}
         <div
           className="rounded-lg p-3 shadow-lg border-2 relative group"
           style={{
             backgroundColor: color.bg,
             borderColor: color.border,
-            color: "#111827", // noir
+            color: "#111827",
             fontFamily: "'Arial Black', Arial, sans-serif",
             lineHeight: 1.2,
             WebkitFontSmoothing: "antialiased",
             textRendering: "optimizeLegibility",
           }}
         >
+          {/* + haut et + bas POSÉS SUR le post-it (z-20, 4px des bords) */}
+          {mode === "moderator" && !isConnecting && (
+            <>
+              <button
+                type="button"
+                className="absolute left-1/2 -translate-x-1/2 w-5 h-5 rounded-full bg-black text-white text-[12px] leading-[18px] shadow z-20 print:hidden"
+                style={{ top: 4 }}
+                title="Ajouter & relier (au-dessus)"
+                onMouseDown={(ev)=>{ev.preventDefault();ev.stopPropagation();}}
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  createLinkedPostIt(p, "up");
+                }}
+              >
+                +
+              </button>
+
+              <button
+                type="button"
+                className="absolute left-1/2 -translate-x-1/2 w-5 h-5 rounded-full bg-black text-white text-[12px] leading-[18px] shadow z-20 print:hidden"
+                style={{ bottom: 4 }}
+                title="Ajouter & relier (au-dessous)"
+                onMouseDown={(ev)=>{ev.preventDefault();ev.stopPropagation();}}
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  createLinkedPostIt(p, "down");
+                }}
+              >
+                +
+              </button>
+            </>
+          )}
+
           {/* Actions coin */}
           {mode === "moderator" && !isConnecting && !paintMode && (
             <div className="absolute -top-1 -right-1 flex gap-1">
@@ -889,7 +893,7 @@ export default function App() {
     }
   };
 
-  /* >>> NOUVEAU : Export PNG HD */
+  /* >>> Export PNG HD */
   const exportTreeAsPNG = async () => {
     const node = treeAreaRef.current;
     if (!node) return;
