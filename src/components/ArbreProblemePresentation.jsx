@@ -20,9 +20,13 @@ const ArbreProblemePresentation = ({
     return url.toString();
   }, [sessionId]);
 
-  // ↘️ médias hébergés sur ton ancien repo GitHub
+  // Médias hébergés sur ton ancien repo GitHub
   const GITHUB_BASE =
     "https://raw.githubusercontent.com/Ba-Jules/new-collaborative-tools/main/public";
+
+  const VIDEO_URL = `${GITHUB_BASE}/Arbre-Problemes-presentation.mp4`;
+  const IMG_PROBLEME = `${GITHUB_BASE}/arbre_probleme.JPG`;
+  const IMG_OBJECTIFS = `${GITHUB_BASE}/arbre_objectifs_exemple.JPG`;
 
   const slides = [
     {
@@ -58,6 +62,7 @@ const ArbreProblemePresentation = ({
             </div>
           </div>
 
+          {/* Unique bouton vidéo ici */}
           <div className="flex justify-center">
             <button
               className="inline-flex items-center px-4 py-2 rounded-lg border border-gray-300 text-sm font-semibold text-gray-800 bg-white hover:bg-gray-50"
@@ -82,12 +87,13 @@ const ArbreProblemePresentation = ({
 
           <div className="rounded-xl overflow-hidden border border-gray-200 bg-white shadow-sm">
             <img
-              src={`${GITHUB_BASE}/arbre_probleme.JPG`}
+              src={IMG_PROBLEME}
               alt="Schéma de structure de l'Arbre à Problèmes"
               className="w-full h-auto"
               loading="lazy"
               decoding="async"
               fetchpriority="low"
+              crossOrigin="anonymous"
             />
           </div>
 
@@ -127,11 +133,12 @@ const ArbreProblemePresentation = ({
             </p>
             <div className="rounded-lg overflow-hidden border border-gray-200">
               <img
-                src={`${GITHUB_BASE}/arbre_objectifs_exemple.JPG`}
+                src={IMG_OBJECTIFS}
                 alt="Exemple d'arbre à objectifs"
                 className="w-full h-auto"
                 loading="lazy"
                 decoding="async"
+                crossOrigin="anonymous"
               />
             </div>
           </div>
@@ -143,6 +150,7 @@ const ArbreProblemePresentation = ({
       title: "Démarrer la session",
       content: (
         <div className="grid lg:grid-cols-2 gap-8">
+          {/* Formulaire Projet / Thème */}
           <div className="p-6 bg-white rounded-xl border border-gray-200 shadow-sm">
             <h4 className="text-xl font-bold text-gray-900 mb-4">
               Paramètres de l'atelier
@@ -193,6 +201,7 @@ const ArbreProblemePresentation = ({
             </div>
           </div>
 
+          {/* QR persistant */}
           <div className="p-6 bg-white rounded-xl border border-gray-200 shadow-sm">
             <div className="flex items-center gap-2 mb-4">
               <QrCode className="w-5 h-5 text-gray-700" />
@@ -229,19 +238,15 @@ const ArbreProblemePresentation = ({
     <div className="max-w-6xl mx-auto p-4 md:p-8">
       <div className="bg-white rounded-2xl shadow-2xl ring-1 ring-gray-100 overflow-hidden">
         <div className="p-5 md:p-8">
+          {/* En-tête : on supprime le bouton Vidéo global pour n'en garder qu'un (dans l'intro) */}
           <div className="flex justify-between items-center mb-6 md:mb-8">
             <h2 className="text-2xl md:text-4xl font-black tracking-tight text-gray-900">
               {slides[currentSlide].title}
             </h2>
-            <button
-              className="inline-flex items-center px-3 md:px-6 py-2 md:py-3 border border-gray-300 rounded-lg text-sm font-semibold text-gray-800 bg-white hover:bg-gray-50"
-              onClick={() => setShowVideo(true)}
-            >
-              <Play className="w-5 h-5 mr-2" />
-              Vidéo
-            </button>
+            <div />
           </div>
 
+          {/* Barre de progression */}
           <div className="h-1 bg-gray-100 rounded-full overflow-hidden mb-6">
             <div
               className="h-full bg-gray-900 transition-all"
@@ -250,10 +255,12 @@ const ArbreProblemePresentation = ({
             />
           </div>
 
+          {/* Corps de slide */}
           <div className="min-h-[420px] md:min-h-[560px]">
             {slides[currentSlide].content}
           </div>
 
+          {/* Navigation */}
           <div className="flex justify-between items-center mt-8">
             <button
               className="inline-flex items-center px-4 md:px-6 py-2 md:py-3 border border-gray-300 rounded-lg text-sm font-semibold bg-white disabled:text-gray-400 disabled:cursor-not-allowed enabled:text-gray-800 enabled:hover:bg-gray-50"
@@ -282,6 +289,7 @@ const ArbreProblemePresentation = ({
         </div>
       </div>
 
+      {/* Modale vidéo */}
       {showVideo && (
         <div className="fixed inset-0 bg-black/75 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl overflow-hidden w-full max-w-4xl relative shadow-2xl">
@@ -294,16 +302,31 @@ const ArbreProblemePresentation = ({
             </button>
             <div className="p-4 md:p-6">
               <div className="aspect-video bg-gray-100 rounded-lg overflow-hidden">
-                <video className="w-full h-full" controls autoPlay>
-                  <source
-                    src={`${GITHUB_BASE}/Arbre-Problemes-presentation.mp4`}
-                    type="video/mp4"
-                  />
+                <video
+                  className="w-full h-full"
+                  controls
+                  autoPlay
+                  playsInline
+                  preload="metadata"
+                  crossOrigin="anonymous"
+                >
+                  <source src={VIDEO_URL} type="video/mp4" />
                   Votre navigateur ne supporte pas la lecture de vidéos.
                 </video>
               </div>
+
+              {/* Lien direct (secours si un bloqueur/extension empêche le lecteur) */}
               <div className="mt-3 text-sm text-gray-600 text-center">
-                Présentation détaillée de l’Arbre à Problèmes
+                Présentation détaillée de l’Arbre à Problèmes —{" "}
+                <a
+                  href={VIDEO_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline"
+                >
+                  ouvrir la vidéo dans un nouvel onglet
+                </a>
+                .
               </div>
             </div>
           </div>
