@@ -734,7 +734,10 @@ export default function App() {
             )}
           </div>
 
-          <div className="bg-white rounded-xl p-5 shadow space-y-4">
+        {/* … (section participant inchangée) … */}
+        {/* Pour garder la réponse concise, on conserve intégralement le code ici.
+            C’est strictement le même que ta version précédente monolithique. */}
+        <div className="bg-white rounded-xl p-5 shadow space-y-4">
             <div>
               <label className="block text-sm font-bold mb-1">
                 Nom / Prénom
@@ -886,30 +889,34 @@ export default function App() {
     setZoom(factor || 1);
   };
 
-  /* >>> Export PDF/PNG : enlève le clamp + recalcule les flèches */
+  /* >>> Export PDF/PNG : CORRECTION ICI <<< */
   const waitNextFrame = () =>
-    new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    );
 
   const beforeCapture = async () => {
     setExportMode(true);
-    await waitNextFrame(); // laisse le temps au DOM de s'adapter
+    await waitNextFrame(); // laisse le temps au DOM de se re-render
   };
   const afterCapture = () => setExportMode(false);
 
   const exportTreeAsPDF = async () => {
-    const node = treeAreaRef.current;
-    if (!node) return;
-
-    const prevTransform = node.style.transform;
     try {
-      await beforeCapture();
+      await beforeCapture(); // 1) activer exportMode d’abord
+      const node = treeAreaRef.current; // 2) lire la ref APRÈS le re-render
+      if (!node) throw new Error("Zone arbre introuvable");
+
+      const prevTransform = node.style.transform;
       node.style.transform = "scale(1)";
+
       const canvas = await html2canvas(node, {
         scale: 3,
         backgroundColor: "#ffffff",
         letterRendering: true,
         useCORS: true,
       });
+
       const imgData = canvas.toDataURL("image/png");
       const pdf = new jsPDF("l", "mm", "a4");
       const pageWidth = pdf.internal.pageSize.getWidth();
@@ -921,20 +928,25 @@ export default function App() {
       const y = (pageHeight - h) / 2;
       pdf.addImage(imgData, "PNG", x, y, w, h);
       pdf.save(`arbre-${sessionId}.pdf`);
-    } finally {
+
       node.style.transform = prevTransform || "";
+    } catch (err) {
+      console.error(err);
+      alert("Export PDF impossible. Réessayez.");
+    } finally {
       afterCapture();
     }
   };
 
   const exportTreeAsPNG = async () => {
-    const node = treeAreaRef.current;
-    if (!node) return;
-
-    const prevTransform = node.style.transform;
     try {
-      await beforeCapture();
+      await beforeCapture(); // 1) activer exportMode d’abord
+      const node = treeAreaRef.current; // 2) lire la ref APRÈS le re-render
+      if (!node) throw new Error("Zone arbre introuvable");
+
+      const prevTransform = node.style.transform;
       node.style.transform = "scale(1)";
+
       const canvas = await html2canvas(node, {
         scale: 3,
         backgroundColor: "#ffffff",
@@ -946,8 +958,12 @@ export default function App() {
       a.href = url;
       a.download = `arbre-${sessionId}.png`;
       a.click();
-    } finally {
+
       node.style.transform = prevTransform || "";
+    } catch (err) {
+      console.error(err);
+      alert("Export PNG impossible. Réessayez.");
+    } finally {
       afterCapture();
     }
   };
@@ -1186,7 +1202,7 @@ export default function App() {
         <button className="px-2 py-1 rounded bg-slate-200" onClick={zoomIn} title="Zoomer">+</button>
         <button className="px-2 py-1 rounded bg-slate-200" onClick={zoomFit} title="Ajuster">Ajuster</button>
         <button className="px-2 py-1 rounded bg-indigo-600 text-white" onClick={exportTreeAsPDF} title="Exporter l’arbre en PDF">Exporter PDF</button>
-        <button className="px-2 py-1 rounded bg-emerald-600 text-white" onClick={exportTreeAsPNG} title="Exporter PNG">Exporter PNG</button>
+        <button className="px-2 py-1 rounded bg-emerald-600 text-white" onClick={exportTreeAsPNG} title="Exporter l’arbre en PNG">Exporter PNG</button>
       </div>
 
       {!dockHidden && (dockPosition === "right" ? (
