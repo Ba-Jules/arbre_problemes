@@ -597,13 +597,13 @@ export default function App() {
             textRendering: "optimizeLegibility",
           }}
         >
-          {/* + haut et + bas POSÉS SUR le post-it (z-20, 4px des bords) */}
+          {/* + haut et + bas POSÉS SUR le post-it, sans cercle, à ~2mm des bords */}
           {mode === "moderator" && !isConnecting && (
             <>
               <button
                 type="button"
-                className="absolute left-1/2 -translate-x-1/2 w-5 h-5 rounded-full bg-black text-white text-[12px] leading-[18px] shadow z-20 print:hidden"
-                style={{ top: 4 }}
+                className="absolute left-1/2 -translate-x-1/2 text-[16px] font-black text-black leading-none z-20 print:hidden px-1 bg-transparent"
+                style={{ top: "2mm" }}
                 title="Ajouter & relier (au-dessus)"
                 onMouseDown={(ev)=>{ev.preventDefault();ev.stopPropagation();}}
                 onClick={(ev) => {
@@ -616,8 +616,8 @@ export default function App() {
 
               <button
                 type="button"
-                className="absolute left-1/2 -translate-x-1/2 w-5 h-5 rounded-full bg-black text-white text-[12px] leading-[18px] shadow z-20 print:hidden"
-                style={{ bottom: 4 }}
+                className="absolute left-1/2 -translate-x-1/2 text-[16px] font-black text-black leading-none z-20 print:hidden px-1 bg-transparent"
+                style={{ bottom: "2mm" }}
                 title="Ajouter & relier (au-dessous)"
                 onMouseDown={(ev)=>{ev.preventDefault();ev.stopPropagation();}}
                 onClick={(ev) => {
@@ -1150,7 +1150,7 @@ export default function App() {
         <button className="px-2 py-1 rounded bg-slate-200" onClick={zoomIn} title="Zoomer">+</button>
         <button className="px-2 py-1 rounded bg-slate-200" onClick={zoomFit} title="Ajuster">Ajuster</button>
         <button className="px-2 py-1 rounded bg-indigo-600 text-white" onClick={exportTreeAsPDF} title="Exporter l’arbre en PDF">Exporter PDF</button>
-        <button className="px-2 py-1 rounded bg-emerald-600 text-white" onClick={exportTreeAsPNG} title="Exporter l’arbre en PNG">Exporter PNG</button>
+        <button className="px-2 py-1 rounded bg-emerald-600 text-white" onClick={exportTreeAsPNG} title="Exporter PNG">Exporter PNG</button>
       </div>
 
       {!dockHidden && (dockPosition === "right" ? (
