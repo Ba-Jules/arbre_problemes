@@ -597,13 +597,13 @@ export default function App() {
             textRendering: "optimizeLegibility",
           }}
         >
-          {/* + haut et + bas POSÉS SUR le post-it, sans cercle, à ~2mm des bords */}
+          {/* + haut et + bas – SUR le post-it, sans cercle, collés aux bords */}
           {mode === "moderator" && !isConnecting && (
             <>
               <button
                 type="button"
                 className="absolute left-1/2 -translate-x-1/2 text-[16px] font-black text-black leading-none z-20 print:hidden px-1 bg-transparent"
-                style={{ top: "2mm" }}
+                style={{ top: 0 }}
                 title="Ajouter & relier (au-dessus)"
                 onMouseDown={(ev)=>{ev.preventDefault();ev.stopPropagation();}}
                 onClick={(ev) => {
@@ -617,7 +617,7 @@ export default function App() {
               <button
                 type="button"
                 className="absolute left-1/2 -translate-x-1/2 text-[16px] font-black text-black leading-none z-20 print:hidden px-1 bg-transparent"
-                style={{ bottom: "2mm" }}
+                style={{ bottom: 0 }}
                 title="Ajouter & relier (au-dessous)"
                 onMouseDown={(ev)=>{ev.preventDefault();ev.stopPropagation();}}
                 onClick={(ev) => {
