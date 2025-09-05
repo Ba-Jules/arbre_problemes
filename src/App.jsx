@@ -35,18 +35,18 @@ const MAX_CHARS = 50;
 
 /* Fond & bord — texte forcé en NOIR pour lisibilité */
 const COLOR_PALETTE = {
-  red:   { bg: "#ef4444", border: "#991b1b" },
-  pink:  { bg: "#fb7185", border: "#be123c" },
-  green: { bg: "#22c55e", border: "#166534" },
+  red:   { bg: "#ef4444", border: "#991b1b" }, // Problème central
+  pink:  { bg: "#fb7185", border: "#be123c" }, // Causes
+  amber: { bg: "#f59e0b", border: "#92400e" }, // Conséquences (orange/ambre)
   teal:  { bg: "#14b8a6", border: "#0f766e" },
   blue:  { bg: "#3b82f6", border: "#1e3a8a" },
-  amber: { bg: "#f59e0b", border: "#92400e" },
+  green: { bg: "#22c55e", border: "#166534" }, // conservé pour usages libres
 };
 
 const CATEGORY_DEFAULT_COLOR = {
   problem: "red",
   causes: "pink",
-  consequences: "green",
+  consequences: "amber", // ← CONSEQUENCES en orange/ambre
 };
 
 const defaultPanelStates = {
@@ -113,6 +113,9 @@ export default function App() {
   /* -------- Export (PDF/PNG) -------- */
   const [exportMode, setExportMode] = useState(false); // active le rendu sans clamp + hauteurs dynamiques
   const postItRefs = useRef({}); // id -> DOM node pour mesurer la hauteur en export
+
+  /* -------- Présence -------- */
+  const [participantsCount, setParticipantsCount] = useState(1);
 
   /* -------- Refs -------- */
   const treeAreaRef = useRef(null);
@@ -258,6 +261,53 @@ export default function App() {
       unsubC();
     };
   }, [sessionId]);
+  /* ========================= Présence (participants connectés) ========================= */
+  useEffect(() => {
+    if (!sessionId) return;
+
+    const uid =
+      localStorage.getItem("presenceUid") || crypto.randomUUID?.() || String(Math.random());
+    localStorage.setItem("presenceUid", uid);
+
+    const participantsCol = collection(db, `sessions/${sessionId}/participants`);
+    const meRef = doc(participantsCol, uid);
+
+    // Déclare ma présence
+    setDoc(
+      meRef,
+      {
+        uid,
+        role: mode === "participant" ? "participant" : "moderator",
+        lastSeen: serverTimestamp(),
+        connected: true,
+      },
+      { merge: true }
+    ).catch(() => {});
+
+    // Compteur en live
+    const unsub = onSnapshot(participantsCol, (snap) => {
+      const list = snap.docs.map((d) => d.data());
+      const count = list.filter((r) => r.connected !== false).length;
+      setParticipantsCount(count || 1);
+    });
+
+    // Nettoyage à la fermeture
+    const onUnload = async () => {
+      try {
+        await deleteDoc(meRef);
+      } catch {
+        try {
+          await setDoc(meRef, { connected: false, lastSeen: serverTimestamp() }, { merge: true });
+        } catch {}
+      }
+    };
+    window.addEventListener("beforeunload", onUnload);
+
+    return () => {
+      window.removeEventListener("beforeunload", onUnload);
+      unsub?.();
+    };
+  }, [sessionId, mode]);
 
   /* ========================= CRUD Post-its ========================= */
 
@@ -320,14 +370,15 @@ export default function App() {
     }
   };
 
-  /* ====== Création via “+ haut / + bas” ====== */
+  /* ====== Création via “+ haut / + bas” (CORRIGÉ) ====== */
   const createLinkedPostIt = async (p, direction /* 'up' | 'down' */) => {
     try {
       const gap = 30;
 
       let newCat = p.category;
       if (p.category === "problem") {
-        newCat = direction === "up" ? "causes" : "consequences";
+        // *** Correction : HAUT = Conséquences, BAS = Causes ***
+        newCat = direction === "up" ? "consequences" : "causes";
       }
 
       const newColor =
@@ -365,7 +416,6 @@ export default function App() {
       alert("Impossible de créer l’étiquette liée.");
     }
   };
-
   /* ========================= Drag & Drop / Click handlers ========================= */
 
   const handleMouseDown = (e, postItId) => {
@@ -562,19 +612,22 @@ export default function App() {
     return base;
   };
 
-  const PanelHeader = ({ title, onAdd }) => (
+  const PanelHeader = ({ title, onAdd, right }) => (
     <div className="flex items-center justify-between p-2 border-b bg-white/70 backdrop-blur-sm">
       <div className="font-semibold text-sm text-slate-700">{title}</div>
-      {onAdd && (
-        <button
-          onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
-          onClick={onAdd}
-          className="w-6 h-6 rounded bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700"
-          title="Ajouter un post-it"
-        >
-          +
-        </button>
-      )}
+      <div className="flex items-center gap-2">
+        {right}
+        {onAdd && (
+          <button
+            onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
+            onClick={onAdd}
+            className="w-6 h-6 rounded bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700"
+            title="Ajouter un post-it"
+          >
+            +
+          </button>
+        )}
+      </div>
     </div>
   );
 
@@ -615,7 +668,7 @@ export default function App() {
             textRendering: "optimizeLegibility",
           }}
         >
-          {/* + haut et + bas – sur le post-it, sans cercle, collés aux bords (masqués en export) */}
+          {/* + haut et + bas – masqués en export */}
           {mode === "moderator" && !isConnecting && !exportMode && (
             <>
               <button
@@ -710,7 +763,6 @@ export default function App() {
       </div>
     );
   };
-
   /* ========================= Participant (vue unifiée) ========================= */
 
   if (mode === "participant" && !standaloneAnalysis) {
@@ -734,10 +786,7 @@ export default function App() {
             )}
           </div>
 
-        {/* … (section participant inchangée) … */}
-        {/* Pour garder la réponse concise, on conserve intégralement le code ici.
-            C’est strictement le même que ta version précédente monolithique. */}
-        <div className="bg-white rounded-xl p-5 shadow space-y-4">
+          <div className="bg-white rounded-xl p-5 shadow space-y-4">
             <div>
               <label className="block text-sm font-bold mb-1">
                 Nom / Prénom
@@ -1072,7 +1121,10 @@ export default function App() {
       </div>
 
       <div className={setPanelStateWrapper("tree", "col-span-6 row-span-9")}>
-        <PanelHeader title="Arbre à Problèmes" />
+        <PanelHeader
+          title="Arbre à Problèmes"
+          right={<span className="text-xs text-slate-600">👥 {participantsCount}</span>}
+        />
         <div className="px-2 py-1 border-b flex items-center gap-2 text-sm">
           <button className="px-2 py-0.5 rounded bg-slate-200 text-slate-700" onClick={zoomOut} title="Dézoomer">–</button>
           <span className="min-w-[44px] text-center font-semibold">{Math.round(zoom * 100)}%</span>
@@ -1133,7 +1185,8 @@ export default function App() {
           }
         />
         <div className="p-2 h-full overflow-y-auto">
-          <ColumnList items={visiblePostIts.consequences} fallbackColor="green" title="Conséquences" />
+          {/* fallbackColor → amber au lieu de green */}
+          <ColumnList items={visiblePostIts.consequences} fallbackColor="amber" title="Conséquences" />
         </div>
       </div>
 
@@ -1196,15 +1249,6 @@ export default function App() {
         </div>
       </div>
 
-      <div className="absolute top-3 left-3 z-40 flex items-center gap-2 bg-white/90 backdrop-blur rounded shadow p-2">
-        <button className="px-2 py-1 rounded bg-slate-200" onClick={zoomOut} title="Dézoomer">–</button>
-        <span className="min-w-[44px] text-center font-semibold">{Math.round(zoom * 100)}%</span>
-        <button className="px-2 py-1 rounded bg-slate-200" onClick={zoomIn} title="Zoomer">+</button>
-        <button className="px-2 py-1 rounded bg-slate-200" onClick={zoomFit} title="Ajuster">Ajuster</button>
-        <button className="px-2 py-1 rounded bg-indigo-600 text-white" onClick={exportTreeAsPDF} title="Exporter l’arbre en PDF">Exporter PDF</button>
-        <button className="px-2 py-1 rounded bg-emerald-600 text-white" onClick={exportTreeAsPNG} title="Exporter l’arbre en PNG">Exporter PNG</button>
-      </div>
-
       {!dockHidden && (dockPosition === "right" ? (
         <div className="absolute right-2 top-16 bottom-2 w-72 bg-white/95 backdrop-blur border rounded-lg shadow p-2 overflow-y-auto z-30">
           <div className="text-sm font-bold mb-2">📥 Zones de collecte</div>
@@ -1213,7 +1257,7 @@ export default function App() {
               <ColumnList items={visiblePostIts.causes} fallbackColor="pink" title="Causes" />
             </DockSection>
             <DockSection title="Conséquences">
-              <ColumnList items={visiblePostIts.consequences} fallbackColor="green" title="Conséquences" />
+              <ColumnList items={visiblePostIts.consequences} fallbackColor="amber" title="Conséquences" />
             </DockSection>
             <DockSection title="Problèmes">
               <ColumnList items={visiblePostIts.problems} fallbackColor="red" title="Problèmes" />
@@ -1228,7 +1272,7 @@ export default function App() {
               <ColumnList items={visiblePostIts.causes} fallbackColor="pink" title="Causes" />
             </DockSection>
             <DockSection title="Conséquences">
-              <ColumnList items={visiblePostIts.consequences} fallbackColor="green" title="Conséquences" />
+              <ColumnList items={visiblePostIts.consequences} fallbackColor="amber" title="Conséquences" />
             </DockSection>
             <DockSection title="Problèmes">
               <ColumnList items={visiblePostIts.problems} fallbackColor="red" title="Problèmes" />
