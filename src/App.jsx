@@ -102,10 +102,14 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState("problem");
   const [participantContent, setParticipantContent] = useState("");
 
-  /* -------- Layout “Focus” -------- */
+  /* -------- Layout "Focus" -------- */
   const [layoutMode, setLayoutMode] = useState("classic"); // 'classic' | 'focus'
   const [dockPosition, setDockPosition] = useState("right"); // 'right' | 'bottom'
   const [dockHidden, setDockHidden] = useState(false);
+
+  /* -------- Vue arbre -------- */
+  const [treeViewFilter, setTreeViewFilter] = useState("all"); // 'all' | 'causes' | 'consequences'
+  const [pendingReplacement, setPendingReplacement] = useState(null); // { draggedId, existingId }
 
   /* -------- Analyse autonome (via URL) -------- */
   const [standaloneAnalysis, setStandaloneAnalysis] = useState(false);
@@ -119,6 +123,12 @@ export default function App() {
 
   /* -------- Refs -------- */
   const treeAreaRef = useRef(null);
+  const selectedPostItRef = useRef(null);
+  const isDraggingRef = useRef(false);
+  const postItsRef = useRef([]);
+  const dragStartedInTreeRef = useRef(false);
+
+  useEffect(() => { postItsRef.current = postIts; }, [postIts]);
 
   /* ===== Helpers URL/Vue ===== */
   const computeFlagsFromUrl = () => {
@@ -370,7 +380,7 @@ export default function App() {
     }
   };
 
-  /* ====== Création via “+ haut / + bas” (CORRIGÉ) ====== */
+  /* ====== Création via "+ haut / + bas" (CORRIGÉ) ====== */
   const createLinkedPostIt = async (p, direction /* 'up' | 'down' */) => {
     try {
       const gap = 30;
@@ -448,7 +458,11 @@ export default function App() {
     }
 
     setSelectedPostIt(postItId);
+    selectedPostItRef.current = postItId;
     setIsDragging(true);
+    isDraggingRef.current = true;
+    const draggedItem = postIts.find((item) => item.id === postItId);
+    dragStartedInTreeRef.current = draggedItem?.isInTree ?? false;
     const rect = e.currentTarget.getBoundingClientRect();
     setDragOffset({ x: e.clientX - rect.left, y: e.clientY - rect.top });
   };
@@ -487,8 +501,30 @@ export default function App() {
   );
 
   const handleMouseUp = () => {
+    if (isDraggingRef.current && selectedPostItRef.current) {
+      const currentPostIts = postItsRef.current;
+      const dragged = currentPostIts.find((p) => p.id === selectedPostItRef.current);
+      if (
+        dragged &&
+        dragged.category === "problem" &&
+        !dragStartedInTreeRef.current &&
+        dragged.isInTree
+      ) {
+        const existingCentral = currentPostIts.find(
+          (p) => p.id !== selectedPostItRef.current && p.category === "problem" && p.isInTree
+        );
+        if (existingCentral) {
+          setPendingReplacement({
+            draggedId: selectedPostItRef.current,
+            existingId: existingCentral.id,
+          });
+        }
+      }
+    }
     setIsDragging(false);
+    isDraggingRef.current = false;
     setSelectedPostIt(null);
+    selectedPostItRef.current = null;
   };
 
   useEffect(() => {
@@ -532,6 +568,7 @@ export default function App() {
   };
 
   const renderConnections = () => {
+    const visibleIds = new Set(visiblePostIts.inTree.map((p) => p.id));
     const byId = Object.fromEntries(postIts.map((p) => [p.id, p]));
     const items = [];
 
@@ -539,6 +576,7 @@ export default function App() {
       const a = byId[c.fromId];
       const b = byId[c.toId];
       if (!a || !b) return;
+      if (!visibleIds.has(a.id) || !visibleIds.has(b.id)) return;
 
       const aH = getNodeHeight(a.id);
       const bH = getNodeHeight(b.id);
@@ -938,6 +976,64 @@ export default function App() {
     setZoom(factor || 1);
   };
 
+  /* ========================= Auto-layout ========================= */
+  const autoLayout = async () => {
+    const CANVAS_W = 2000;
+    const CANVAS_H = layoutMode === "focus" ? 1400 : 1200;
+    const CENTER_X = Math.round(CANVAS_W / 2 - POSTIT_W / 2);
+    const CENTER_Y = Math.round(CANVAS_H / 2 - POSTIT_H / 2);
+    const H_GAP = 30;
+    const V_GAP = 90;
+    const MAX_PER_ROW = 5;
+
+    const inTree = postIts.filter((p) => p.isInTree);
+    const centralProblem = inTree.find((p) => p.category === "problem");
+    const causesInTree = inTree.filter((p) => p.category === "causes");
+    const consInTree = inTree.filter((p) => p.category === "consequences");
+
+    const updates = [];
+    if (centralProblem) updates.push({ id: centralProblem.id, x: CENTER_X, y: CENTER_Y });
+
+    const layoutRows = (items, startY) => {
+      let i = 0;
+      let rowY = startY;
+      while (i < items.length) {
+        const row = items.slice(i, i + MAX_PER_ROW);
+        const rowW = row.length * POSTIT_W + (row.length - 1) * H_GAP;
+        const rowStartX = Math.round((CANVAS_W - rowW) / 2);
+        row.forEach((item, j) => {
+          updates.push({ id: item.id, x: rowStartX + j * (POSTIT_W + H_GAP), y: rowY });
+        });
+        i += MAX_PER_ROW;
+        rowY += POSTIT_H + V_GAP;
+      }
+    };
+
+    if (causesInTree.length > 0) layoutRows(causesInTree, CENTER_Y + POSTIT_H + V_GAP);
+
+    if (consInTree.length > 0) {
+      const rows = Math.ceil(consInTree.length / MAX_PER_ROW);
+      const blockH = rows * (POSTIT_H + V_GAP) - V_GAP;
+      const startY = Math.max(10, CENTER_Y - V_GAP - blockH);
+      layoutRows(consInTree, startY);
+    }
+
+    setPostIts((prev) =>
+      prev.map((p) => {
+        const u = updates.find((u) => u.id === p.id);
+        return u ? { ...p, x: u.x, y: u.y } : p;
+      })
+    );
+    for (const { id, x, y } of updates) await updatePostItInFirebase(id, { x, y });
+
+    if (treeScrollRef.current) {
+      const scroll = treeScrollRef.current;
+      const targetX = CENTER_X * zoom + (POSTIT_W * zoom) / 2 - scroll.clientWidth / 2;
+      const targetY = CENTER_Y * zoom + (POSTIT_H * zoom) / 2 - scroll.clientHeight / 2;
+      scroll.scrollTo({ left: Math.max(0, targetX), top: Math.max(0, targetY), behavior: "smooth" });
+    }
+  };
+
   /* >>> Export PDF/PNG : CORRECTION ICI <<< */
   const waitNextFrame = () =>
     new Promise((resolve) =>
@@ -1018,7 +1114,12 @@ export default function App() {
   };
 
   const visiblePostIts = {
-    inTree: postIts.filter((p) => p.isInTree),
+    inTree: postIts.filter((p) => {
+      if (!p.isInTree) return false;
+      if (treeViewFilter === "causes") return p.category === "causes" || p.category === "problem";
+      if (treeViewFilter === "consequences") return p.category === "consequences" || p.category === "problem";
+      return true;
+    }),
     causes: postIts.filter((p) => p.category === "causes" && !p.isInTree),
     consequences: postIts.filter((p) => p.category === "consequences" && !p.isInTree),
     problems: postIts.filter((p) => p.category === "problem" && !p.isInTree),
@@ -1130,9 +1231,26 @@ export default function App() {
           <span className="min-w-[44px] text-center font-semibold">{Math.round(zoom * 100)}%</span>
           <button className="px-2 py-0.5 rounded bg-slate-200 text-slate-700" onClick={zoomIn} title="Zoomer">+</button>
           <button className="px-2 py-0.5 rounded bg-slate-200 text-slate-700" onClick={zoomFit} title="Ajuster">Ajuster</button>
-          <button className="ml-2 px-2 py-0.5 rounded bg-indigo-600 text-white" onClick={exportTreeAsPDF} title="Exporter l’arbre en PDF">Exporter PDF</button>
-          <button className="px-2 py-0.5 rounded bg-emerald-600 text-white" onClick={exportTreeAsPNG} title="Exporter l’arbre en PNG">Exporter PNG</button>
-          <span className="ml-auto text-xs text-slate-500">Astuce&nbsp;: Ctrl/⌘ + molette</span>
+          <div className="w-px h-5 bg-slate-300 mx-1" />
+          <button className="px-2 py-0.5 rounded bg-violet-600 text-white text-xs font-semibold" onClick={autoLayout} title="Centrer et organiser automatiquement">Centrer</button>
+          {[
+            { key: "all", label: "Tout" },
+            { key: "causes", label: "Causes" },
+            { key: "consequences", label: "Conséquences" },
+          ].map(({ key, label }) => (
+            <button
+              key={key}
+              className={`px-2 py-0.5 rounded text-xs font-semibold ${treeViewFilter === key ? "bg-indigo-600 text-white" : "bg-slate-200 text-slate-700"}`}
+              onClick={() => setTreeViewFilter(key)}
+              title={`Afficher : ${label}`}
+            >
+              {label}
+            </button>
+          ))}
+          <div className="w-px h-5 bg-slate-300 mx-1" />
+          <button className="px-2 py-0.5 rounded bg-indigo-600 text-white" onClick={exportTreeAsPDF} title="Exporter l’arbre en PDF">PDF</button>
+          <button className="px-2 py-0.5 rounded bg-emerald-600 text-white" onClick={exportTreeAsPNG} title="Exporter l’arbre en PNG">PNG</button>
+          <span className="ml-auto text-xs text-slate-500">Ctrl/⌘ + molette</span>
         </div>
 
         <div
@@ -1247,6 +1365,29 @@ export default function App() {
           </svg>
           {visiblePostIts.inTree.map(renderPostIt)}
         </div>
+      </div>
+
+      {/* Barre de contrôle flottante (focus) */}
+      <div className="absolute top-2 left-2 z-30 flex items-center gap-1 bg-white/90 backdrop-blur border rounded-lg shadow px-2 py-1 text-xs">
+        <button className="px-2 py-0.5 rounded bg-violet-600 text-white font-semibold" onClick={autoLayout} title="Centrer et organiser">Centrer</button>
+        {[
+          { key: "all", label: "Tout" },
+          { key: "causes", label: "Causes" },
+          { key: "consequences", label: "Conséquences" },
+        ].map(({ key, label }) => (
+          <button
+            key={key}
+            className={`px-2 py-0.5 rounded font-semibold ${treeViewFilter === key ? "bg-indigo-600 text-white" : "bg-slate-200 text-slate-700"}`}
+            onClick={() => setTreeViewFilter(key)}
+          >
+            {label}
+          </button>
+        ))}
+        <div className="w-px h-4 bg-slate-300 mx-1" />
+        <button className="px-2 py-0.5 rounded bg-slate-200 text-slate-700" onClick={zoomOut}>–</button>
+        <span className="min-w-[36px] text-center font-semibold">{Math.round(zoom * 100)}%</span>
+        <button className="px-2 py-0.5 rounded bg-slate-200 text-slate-700" onClick={zoomIn}>+</button>
+        <button className="px-2 py-0.5 rounded bg-slate-200 text-slate-700" onClick={zoomFit}>Ajuster</button>
       </div>
 
       {!dockHidden && (dockPosition === "right" ? (
@@ -1473,6 +1614,54 @@ export default function App() {
           </div>
         </div>
       )}
+      {pendingReplacement && (() => {
+        const existing = postIts.find((p) => p.id === pendingReplacement.existingId);
+        return (
+          <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
+            <div className="bg-white rounded-xl shadow-xl w-[460px] p-5">
+              <div className="font-bold text-base mb-2">Remplacer le problème central ?</div>
+              <p className="text-sm text-slate-600 mb-2">Un problème central est déjà sur l'arbre :</p>
+              <div className="p-3 bg-red-100 border border-red-300 rounded font-bold text-sm mb-4 whitespace-pre-wrap">
+                {existing?.content}
+              </div>
+              <p className="text-sm text-slate-600 mb-4">
+                Le remplacer par le nouveau ? L'ancien retournera dans&nbsp;
+                <span className="font-semibold">Problèmes Suggérés</span>.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  className="px-4 py-2 rounded bg-slate-200 text-slate-800 font-semibold"
+                  onClick={() => {
+                    updatePostItInFirebase(pendingReplacement.draggedId, { isInTree: false });
+                    setPostIts((prev) =>
+                      prev.map((p) =>
+                        p.id === pendingReplacement.draggedId ? { ...p, isInTree: false } : p
+                      )
+                    );
+                    setPendingReplacement(null);
+                  }}
+                >
+                  Non, annuler
+                </button>
+                <button
+                  className="px-4 py-2 rounded bg-red-600 text-white font-semibold"
+                  onClick={() => {
+                    updatePostItInFirebase(pendingReplacement.existingId, { isInTree: false });
+                    setPostIts((prev) =>
+                      prev.map((p) =>
+                        p.id === pendingReplacement.existingId ? { ...p, isInTree: false } : p
+                      )
+                    );
+                    setPendingReplacement(null);
+                  }}
+                >
+                  Oui, remplacer
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
