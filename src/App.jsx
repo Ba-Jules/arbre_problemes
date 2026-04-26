@@ -1042,16 +1042,30 @@ export default function App() {
   const CANVAS_H_CLASSIC = 1200;
   const CANVAS_H_FOCUS = 1400;
 
-  const zoomOut = () => setZoom((z) => Math.max(0.2, +(z - 0.1).toFixed(2)));
-  const zoomIn = () => setZoom((z) => Math.min(2, +(z + 0.1).toFixed(2)));
+  // Zoom centré sur le centre du viewport visible
+  const zoomAround = (newZoom) => {
+    const scroll = treeScrollRef.current;
+    if (!scroll) { setZoom(newZoom); return; }
+    // Point du canvas au centre du viewport (coordonnées canvas avant zoom)
+    const cx = (scroll.scrollLeft + scroll.clientWidth  / 2) / zoom;
+    const cy = (scroll.scrollTop  + scroll.clientHeight / 2) / zoom;
+    setZoom(newZoom);
+    requestAnimationFrame(() => {
+      scroll.scrollLeft = Math.max(0, cx * newZoom - scroll.clientWidth  / 2);
+      scroll.scrollTop  = Math.max(0, cy * newZoom - scroll.clientHeight / 2);
+    });
+  };
+
+  const zoomOut = () => zoomAround(Math.max(0.2, +(zoom - 0.1).toFixed(2)));
+  const zoomIn  = () => zoomAround(Math.min(2,   +(zoom + 0.1).toFixed(2)));
   const zoomFit = () => {
     const wrap = treeScrollRef.current;
     if (!wrap) return;
     const canvasH = layoutMode === "focus" ? CANVAS_H_FOCUS : CANVAS_H_CLASSIC;
-    const availW = wrap.clientWidth;
-    const availH = wrap.clientHeight;
-    const factor = Math.max(0.2, Math.min(2, Math.min(availW / CANVAS_W, availH / canvasH)));
+    const factor = Math.max(0.2, Math.min(2, Math.min(wrap.clientWidth / CANVAS_W, wrap.clientHeight / canvasH)));
     setZoom(+factor.toFixed(2));
+    // Après ajustement, remettre le scroll à l'origine
+    requestAnimationFrame(() => { if (wrap) { wrap.scrollLeft = 0; wrap.scrollTop = 0; } });
   };
 
   /* ========================= Auto-layout intelligent ========================= */
@@ -1362,7 +1376,7 @@ export default function App() {
         </div>
       </div>
 
-      <div className={setPanelStateWrapper("tree", "col-span-6 row-span-9")}>
+      <div className={`${setPanelStateWrapper("tree", "col-span-6 row-span-9")} min-w-0 min-h-0`}>
         <PanelHeader
           title="Arbre à Problèmes"
           right={<span className="text-xs text-slate-600">👥 {participantsCount}</span>}
@@ -1401,7 +1415,7 @@ export default function App() {
             if (e.ctrlKey || e.metaKey) {
               e.preventDefault();
               const delta = e.deltaY > 0 ? -0.05 : 0.05;
-              setZoom((z) => Math.max(0.2, Math.min(2, +(z + delta).toFixed(2))));
+              zoomAround(Math.max(0.2, Math.min(2, +(zoom + delta).toFixed(2))));
             }
           }}
         >
@@ -1487,7 +1501,7 @@ export default function App() {
           if (e.ctrlKey || e.metaKey) {
             e.preventDefault();
             const delta = e.deltaY > 0 ? -0.05 : 0.05;
-            setZoom((z) => Math.max(0.2, Math.min(2, +(z + delta).toFixed(2))));
+            zoomAround(Math.max(0.2, Math.min(2, +(zoom + delta).toFixed(2))));
           }
         }}
       >
