@@ -1419,8 +1419,10 @@ export default function App() {
             }
           }}
         >
-          {/* div de sizing : donne au container la vraie taille après zoom pour que les scrollbars apparaissent */}
-          <div style={{ width: CANVAS_W * zoom, height: CANVAS_H_CLASSIC * zoom, position: "relative", flexShrink: 0 }}>
+          {/* div de sizing : dimensions réelles après zoom → scrollbars correctes.
+              overflow:hidden indispensable : sans ça, le child absolu (width:2000px
+              non transformé) force le scroll container à voir 2000px en permanence. */}
+          <div style={{ width: CANVAS_W * zoom, height: CANVAS_H_CLASSIC * zoom, position: "relative", overflow: "hidden" }}>
             <div
               ref={treeAreaRef}
               style={{
@@ -1505,7 +1507,7 @@ export default function App() {
           }
         }}
       >
-        <div style={{ width: CANVAS_W * zoom, height: CANVAS_H_FOCUS * zoom, position: "relative", flexShrink: 0 }}>
+        <div style={{ width: CANVAS_W * zoom, height: CANVAS_H_FOCUS * zoom, position: "relative", flexShrink: 0, overflow: "hidden" }}>
           <div
             ref={treeAreaRef}
             style={{
