@@ -706,18 +706,22 @@ export default function App() {
             textRendering: "optimizeLegibility",
           }}
         >
-          {/* + haut et + bas – masqués en export */}
-          {mode === "moderator" && !isConnecting && !exportMode && (
+          {/* + boutons de connexion – masqués en export et en mode peinture */}
+          {mode === "moderator" && !paintMode && !exportMode && (
             <>
               <button
                 type="button"
-                className="absolute left-1/2 -translate-x-1/2 text-[16px] font-black text-black leading-none z-20 print:hidden px-1 bg-transparent"
+                className={`absolute left-1/2 -translate-x-1/2 text-[16px] font-black leading-none z-20 print:hidden px-1 rounded transition-colors ${
+                  isSource ? "text-blue-600 bg-blue-100" : "text-black bg-transparent hover:text-blue-500"
+                }`}
                 style={{ top: 0 }}
-                title="Ajouter & relier (au-dessus)"
-                onMouseDown={(ev)=>{ev.preventDefault();ev.stopPropagation();}}
+                title={isSource ? "Source active — cliquez sur une autre étiquette pour relier" : "Relier à une autre étiquette"}
+                onMouseDown={(ev) => { ev.preventDefault(); ev.stopPropagation(); }}
                 onClick={(ev) => {
                   ev.stopPropagation();
-                  createLinkedPostIt(p, "up");
+                  setPaintMode(false);
+                  setIsConnecting(true);
+                  setConnectSourceId(p.id);
                 }}
               >
                 +
@@ -725,13 +729,17 @@ export default function App() {
 
               <button
                 type="button"
-                className="absolute left-1/2 -translate-x-1/2 text-[16px] font-black text-black leading-none z-20 print:hidden px-1 bg-transparent"
+                className={`absolute left-1/2 -translate-x-1/2 text-[16px] font-black leading-none z-20 print:hidden px-1 rounded transition-colors ${
+                  isSource ? "text-blue-600 bg-blue-100" : "text-black bg-transparent hover:text-blue-500"
+                }`}
                 style={{ bottom: 0 }}
-                title="Ajouter & relier (au-dessous)"
-                onMouseDown={(ev)=>{ev.preventDefault();ev.stopPropagation();}}
+                title={isSource ? "Source active — cliquez sur une autre étiquette pour relier" : "Relier à une autre étiquette"}
+                onMouseDown={(ev) => { ev.preventDefault(); ev.stopPropagation(); }}
                 onClick={(ev) => {
                   ev.stopPropagation();
-                  createLinkedPostIt(p, "down");
+                  setPaintMode(false);
+                  setIsConnecting(true);
+                  setConnectSourceId(p.id);
                 }}
               >
                 +
