@@ -523,24 +523,42 @@ export default function App() {
     [isDragging, selectedPostIt, dragOffset.x, dragOffset.y, zoom]
   );
 
-  const handleMouseUp = () => {
+  const handleMouseUp = (e) => {
     if (isDraggingRef.current && selectedPostItRef.current) {
       const currentPostIts = postItsRef.current;
       const dragged = currentPostIts.find((p) => p.id === selectedPostItRef.current);
-      if (
-        dragged &&
-        dragged.category === "problem" &&
-        !dragStartedInTreeRef.current &&
-        dragged.isInTree
-      ) {
-        const existingCentral = currentPostIts.find(
-          (p) => p.id !== selectedPostItRef.current && p.category === "problem" && p.isInTree
-        );
-        if (existingCentral) {
-          setPendingReplacement({
-            draggedId: selectedPostItRef.current,
-            existingId: existingCentral.id,
-          });
+
+      if (dragged) {
+        const scrollEl = treeScrollRef.current;
+        const rect = scrollEl?.getBoundingClientRect();
+        const isOutsideCanvas =
+          rect &&
+          (e.clientX < rect.left || e.clientX > rect.right ||
+           e.clientY < rect.top  || e.clientY > rect.bottom);
+
+        if (isOutsideCanvas && dragged.isInTree) {
+          // Retour dans le dock : on retire l'étiquette de l'arbre
+          updatePostItInFirebase(selectedPostItRef.current, { isInTree: false });
+          setPostIts((prev) =>
+            prev.map((p) =>
+              p.id === selectedPostItRef.current ? { ...p, isInTree: false } : p
+            )
+          );
+        } else if (
+          dragged.category === "problem" &&
+          !dragStartedInTreeRef.current &&
+          dragged.isInTree
+        ) {
+          // Vérifier s'il faut demander le remplacement du problème central
+          const existingCentral = currentPostIts.find(
+            (p) => p.id !== selectedPostItRef.current && p.category === "problem" && p.isInTree
+          );
+          if (existingCentral) {
+            setPendingReplacement({
+              draggedId: selectedPostItRef.current,
+              existingId: existingCentral.id,
+            });
+          }
         }
       }
     }
@@ -1036,15 +1054,13 @@ export default function App() {
     setZoom(+factor.toFixed(2));
   };
 
-  /* ========================= Auto-layout ========================= */
+  /* ========================= Auto-layout intelligent ========================= */
   const autoLayout = async () => {
-    const CANVAS_W = 2000;
-    const CANVAS_H = layoutMode === "focus" ? 1400 : 1200;
+    const canvasH = layoutMode === "focus" ? CANVAS_H_FOCUS : CANVAS_H_CLASSIC;
     const CENTER_X = Math.round(CANVAS_W / 2 - POSTIT_W / 2);
-    const CENTER_Y = Math.round(CANVAS_H / 2 - POSTIT_H / 2);
-    const H_GAP = 30;
-    const V_GAP = 90;
-    const MAX_PER_ROW = 5;
+    const CENTER_Y = Math.round(canvasH / 2 - POSTIT_H / 2);
+    const H_GAP = 40;   // espace horizontal entre étiquettes d'un même niveau
+    const V_GAP = 100;  // espace vertical entre niveaux
 
     const inTree = postIts.filter((p) => p.isInTree);
     const centralProblem = inTree.find((p) => p.category === "problem");
@@ -1054,28 +1070,92 @@ export default function App() {
     const updates = [];
     if (centralProblem) updates.push({ id: centralProblem.id, x: CENTER_X, y: CENTER_Y });
 
-    const layoutRows = (items, startY) => {
-      let i = 0;
-      let rowY = startY;
-      while (i < items.length) {
-        const row = items.slice(i, i + MAX_PER_ROW);
+    /**
+     * BFS depuis le problème central pour trouver la profondeur de chaque
+     * étiquette dans sa branche (causes ou conséquences).
+     * - Niveau 1 = directement relié au problème central
+     * - Niveau 2 = relié à un élément de niveau 1, etc.
+     * - Les éléments sans connexion sont mis au dernier niveau.
+     * Les connexions sont parcourues dans les deux sens (non dirigé).
+     */
+    const buildLevels = (items, rootId) => {
+      if (items.length === 0) return [];
+      const itemById = new Map(items.map((p) => [p.id, p]));
+      const allIds = new Set([rootId, ...items.map((p) => p.id)]);
+      const visited = new Set([rootId]);
+      const depthMap = new Map(); // id → profondeur (1-based depuis root)
+
+      let frontier = [rootId];
+      let depth = 0;
+
+      while (frontier.length > 0) {
+        depth++;
+        const next = [];
+        for (const nodeId of frontier) {
+          connections.forEach((c) => {
+            const otherId =
+              c.fromId === nodeId && allIds.has(c.toId) ? c.toId :
+              c.toId === nodeId   && allIds.has(c.fromId) ? c.fromId :
+              null;
+            if (otherId && !visited.has(otherId) && itemById.has(otherId)) {
+              visited.add(otherId);
+              depthMap.set(otherId, depth);
+              next.push(otherId);
+            }
+          });
+        }
+        frontier = next;
+      }
+
+      // Éléments sans connexion → dernier niveau
+      const maxDepth = depthMap.size > 0 ? Math.max(...depthMap.values()) : 0;
+      items.forEach((p) => {
+        if (!depthMap.has(p.id)) depthMap.set(p.id, maxDepth + 1);
+      });
+
+      // Regrouper par niveau
+      const grouped = new Map();
+      items.forEach((p) => {
+        const lvl = depthMap.get(p.id);
+        if (!grouped.has(lvl)) grouped.set(lvl, []);
+        grouped.get(lvl).push(p);
+      });
+
+      return Array.from(grouped.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([, row]) => row);
+    };
+
+    /**
+     * Positionne les rangées de bas en haut (conséquences) ou de haut en bas (causes).
+     * startY = Y de la première rangée (la plus proche du problème)
+     * stepY  = décalage vertical entre rangées (+= vers le bas, -= vers le haut)
+     */
+    const placeRows = (rows, startY, stepY) => {
+      let y = startY;
+      for (const row of rows) {
         const rowW = row.length * POSTIT_W + (row.length - 1) * H_GAP;
         const rowStartX = Math.round((CANVAS_W - rowW) / 2);
+        const clampedY = Math.max(10, Math.min(canvasH - POSTIT_H - 10, y));
         row.forEach((item, j) => {
-          updates.push({ id: item.id, x: rowStartX + j * (POSTIT_W + H_GAP), y: rowY });
+          const x = Math.max(10, Math.min(CANVAS_W - POSTIT_W - 10, rowStartX + j * (POSTIT_W + H_GAP)));
+          updates.push({ id: item.id, x, y: clampedY });
         });
-        i += MAX_PER_ROW;
-        rowY += POSTIT_H + V_GAP;
+        y += stepY;
       }
     };
 
-    if (causesInTree.length > 0) layoutRows(causesInTree, CENTER_Y + POSTIT_H + V_GAP);
-
-    if (consInTree.length > 0) {
-      const rows = Math.ceil(consInTree.length / MAX_PER_ROW);
-      const blockH = rows * (POSTIT_H + V_GAP) - V_GAP;
-      const startY = Math.max(10, CENTER_Y - V_GAP - blockH);
-      layoutRows(consInTree, startY);
+    if (centralProblem) {
+      // Conséquences : au-dessus du problème, niveau 1 le plus proche
+      if (consInTree.length > 0) {
+        const rows = buildLevels(consInTree, centralProblem.id);
+        placeRows(rows, CENTER_Y - POSTIT_H - V_GAP, -(POSTIT_H + V_GAP));
+      }
+      // Causes : en-dessous du problème, niveau 1 le plus proche
+      if (causesInTree.length > 0) {
+        const rows = buildLevels(causesInTree, centralProblem.id);
+        placeRows(rows, CENTER_Y + POSTIT_H + V_GAP, POSTIT_H + V_GAP);
+      }
     }
 
     setPostIts((prev) =>
@@ -1086,7 +1166,8 @@ export default function App() {
     );
     for (const { id, x, y } of updates) await updatePostItInFirebase(id, { x, y });
 
-    if (treeScrollRef.current) {
+    // Recentrer le scroll sur le problème central
+    if (treeScrollRef.current && centralProblem) {
       const scroll = treeScrollRef.current;
       const targetX = CENTER_X * zoom + (POSTIT_W * zoom) / 2 - scroll.clientWidth / 2;
       const targetY = CENTER_Y * zoom + (POSTIT_H * zoom) / 2 - scroll.clientHeight / 2;
