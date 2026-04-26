@@ -130,6 +130,27 @@ export default function App() {
 
   useEffect(() => { postItsRef.current = postIts; }, [postIts]);
 
+  // Auto-ajuste le zoom quand on change de layout ou au premier chargement
+  useEffect(() => {
+    const t = setTimeout(zoomFit, 120);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutMode]);
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") {
+        setIsConnecting(false);
+        setConnectSourceId(null);
+        setPaintMode(false);
+        setEditingId(null);
+        setEditingText("");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   /* ===== Helpers URL/Vue ===== */
   const computeFlagsFromUrl = () => {
     const params = new URLSearchParams(window.location.search);
@@ -451,8 +472,10 @@ export default function App() {
           createdAt: serverTimestamp(),
         }).catch(console.error);
         setConnectSourceId(null);
+        setIsConnecting(false); // quitte le mode connexion après création
       } else {
         setConnectSourceId(null);
+        setIsConnecting(false);
       }
       return;
     }
@@ -719,9 +742,22 @@ export default function App() {
                 onMouseDown={(ev) => { ev.preventDefault(); ev.stopPropagation(); }}
                 onClick={(ev) => {
                   ev.stopPropagation();
-                  setPaintMode(false);
-                  setIsConnecting(true);
-                  setConnectSourceId(p.id);
+                  if (isConnecting && connectSourceId && connectSourceId !== p.id) {
+                    // complète la connexion vers cette étiquette
+                    addDoc(collection(db, "connections"), {
+                      sessionId,
+                      fromId: connectSourceId,
+                      toId: p.id,
+                      createdAt: serverTimestamp(),
+                    }).catch(console.error);
+                    setConnectSourceId(null);
+                    setIsConnecting(false);
+                  } else {
+                    // démarre la connexion depuis cette étiquette
+                    setPaintMode(false);
+                    setIsConnecting(true);
+                    setConnectSourceId(p.id);
+                  }
                 }}
               >
                 +
@@ -737,9 +773,22 @@ export default function App() {
                 onMouseDown={(ev) => { ev.preventDefault(); ev.stopPropagation(); }}
                 onClick={(ev) => {
                   ev.stopPropagation();
-                  setPaintMode(false);
-                  setIsConnecting(true);
-                  setConnectSourceId(p.id);
+                  if (isConnecting && connectSourceId && connectSourceId !== p.id) {
+                    // complète la connexion vers cette étiquette
+                    addDoc(collection(db, "connections"), {
+                      sessionId,
+                      fromId: connectSourceId,
+                      toId: p.id,
+                      createdAt: serverTimestamp(),
+                    }).catch(console.error);
+                    setConnectSourceId(null);
+                    setIsConnecting(false);
+                  } else {
+                    // démarre la connexion depuis cette étiquette
+                    setPaintMode(false);
+                    setIsConnecting(true);
+                    setConnectSourceId(p.id);
+                  }
                 }}
               >
                 +
@@ -748,35 +797,39 @@ export default function App() {
           )}
 
           {/* Actions coin (masquées en export) */}
-          {mode === "moderator" && !isConnecting && !paintMode && !exportMode && (
+          {mode === "moderator" && !exportMode && (
             <div className="absolute -top-1 -right-1 flex gap-1">
-              <button
-                type="button"
-                className="w-5 h-5 bg-black/80 text-white rounded-full text-[11px] flex items-center justify-center"
-                title="Modifier"
-                onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  startEditing(p);
-                }}
-              >
-                ✎
-              </button>
-              <button
-                type="button"
-                className="w-5 h-5 bg-black/80 text-white rounded-full text-[13px] flex items-center justify-center"
-                title="Couleur"
-                onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  const keys = Object.keys(COLOR_PALETTE);
-                  const idx = Math.max(0, keys.indexOf(p.color));
-                  const next = keys[(idx + 1) % keys.length];
-                  updatePostItInFirebase(p.id, { color: next });
-                }}
-              >
-                🎨
-              </button>
+              {!isConnecting && !paintMode && (
+                <>
+                  <button
+                    type="button"
+                    className="w-5 h-5 bg-black/80 text-white rounded-full text-[11px] flex items-center justify-center"
+                    title="Modifier"
+                    onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      startEditing(p);
+                    }}
+                  >
+                    ✎
+                  </button>
+                  <button
+                    type="button"
+                    className="w-5 h-5 bg-black/80 text-white rounded-full text-[13px] flex items-center justify-center"
+                    title="Couleur"
+                    onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      const keys = Object.keys(COLOR_PALETTE);
+                      const idx = Math.max(0, keys.indexOf(p.color));
+                      const next = keys[(idx + 1) % keys.length];
+                      updatePostItInFirebase(p.id, { color: next });
+                    }}
+                  >
+                    🎨
+                  </button>
+                </>
+              )}
               <button
                 type="button"
                 className="w-5 h-5 bg-black/80 text-white rounded-full text-[13px] flex items-center justify-center"
@@ -967,21 +1020,20 @@ export default function App() {
 
   /* ========================= Modérateur ========================= */
 
-  const zoomOut = () => setZoom((z) => Math.max(0.5, +(z - 0.1).toFixed(2)));
+  const CANVAS_W = 2000;
+  const CANVAS_H_CLASSIC = 1200;
+  const CANVAS_H_FOCUS = 1400;
+
+  const zoomOut = () => setZoom((z) => Math.max(0.2, +(z - 0.1).toFixed(2)));
   const zoomIn = () => setZoom((z) => Math.min(2, +(z + 0.1).toFixed(2)));
   const zoomFit = () => {
     const wrap = treeScrollRef.current;
-    const area = treeAreaRef.current;
-    if (!wrap || !area) return;
-    const contentW = area.scrollWidth;
-    const contentH = area.scrollHeight;
+    if (!wrap) return;
+    const canvasH = layoutMode === "focus" ? CANVAS_H_FOCUS : CANVAS_H_CLASSIC;
     const availW = wrap.clientWidth;
     const availH = wrap.clientHeight;
-    const factor = Math.max(
-      0.5,
-      Math.min(2, +(Math.min(availW / contentW, availH / contentH)).toFixed(2))
-    );
-    setZoom(factor || 1);
+    const factor = Math.max(0.2, Math.min(2, Math.min(availW / CANVAS_W, availH / canvasH)));
+    setZoom(+factor.toFixed(2));
   };
 
   /* ========================= Auto-layout ========================= */
@@ -1188,7 +1240,7 @@ export default function App() {
               {p.author}
             </div>
 
-            {!isConnecting && !paintMode && (
+            {!paintMode && (
               <button
                 className="absolute -top-1 -right-1 w-5 h-5 bg-black/80 text-white rounded-full text-[12px] opacity-0 group-hover:opacity-100"
                 onMouseDown={(e)=>{e.preventDefault();e.stopPropagation();}}
@@ -1268,29 +1320,34 @@ export default function App() {
             if (e.ctrlKey || e.metaKey) {
               e.preventDefault();
               const delta = e.deltaY > 0 ? -0.05 : 0.05;
-              setZoom((z) => Math.max(0.5, Math.min(2, +(z + delta).toFixed(2))));
+              setZoom((z) => Math.max(0.2, Math.min(2, +(z + delta).toFixed(2))));
             }
           }}
         >
-          <div
-            ref={treeAreaRef}
-            className="relative"
-            style={{
-              width: 2000,
-              height: 1200,
-              transform: `scale(${zoom})`,
-              transformOrigin: "0 0",
-            }}
-          >
-            <svg className="absolute inset-0 w-[2000px] h-[1200px]" style={{ zIndex: 2 }}>
-              <defs>
-                <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-                  <polygon points="0 0, 10 3.5, 0 7" fill="#0f172a" />
-                </marker>
-              </defs>
-              {renderConnections()}
-            </svg>
-            {visiblePostIts.inTree.map(renderPostIt)}
+          {/* div de sizing : donne au container la vraie taille après zoom pour que les scrollbars apparaissent */}
+          <div style={{ width: CANVAS_W * zoom, height: CANVAS_H_CLASSIC * zoom, position: "relative", flexShrink: 0 }}>
+            <div
+              ref={treeAreaRef}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: CANVAS_W,
+                height: CANVAS_H_CLASSIC,
+                transform: `scale(${zoom})`,
+                transformOrigin: "0 0",
+              }}
+            >
+              <svg className="absolute inset-0 w-[2000px] h-[1200px]" style={{ zIndex: 2 }}>
+                <defs>
+                  <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#0f172a" />
+                  </marker>
+                </defs>
+                {renderConnections()}
+              </svg>
+              {visiblePostIts.inTree.map(renderPostIt)}
+            </div>
           </div>
         </div>
       </div>
@@ -1349,29 +1406,33 @@ export default function App() {
           if (e.ctrlKey || e.metaKey) {
             e.preventDefault();
             const delta = e.deltaY > 0 ? -0.05 : 0.05;
-            setZoom((z) => Math.max(0.2, Math.min(3, +(z + delta).toFixed(2))));
+            setZoom((z) => Math.max(0.2, Math.min(2, +(z + delta).toFixed(2))));
           }
         }}
       >
-        <div
-          ref={treeAreaRef}
-          className="relative"
-          style={{
-            width: 2000,
-            height: 1400,
-            transform: `scale(${zoom})`,
-            transformOrigin: "0 0",
-          }}
-        >
-          <svg className="absolute inset-0 w-[2000px] h-[1400px]" style={{ zIndex: 2 }}>
-            <defs>
-              <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-                <polygon points="0 0, 10 3.5, 0 7" fill="#0f172a" />
-              </marker>
-            </defs>
-            {renderConnections()}
-          </svg>
-          {visiblePostIts.inTree.map(renderPostIt)}
+        <div style={{ width: CANVAS_W * zoom, height: CANVAS_H_FOCUS * zoom, position: "relative", flexShrink: 0 }}>
+          <div
+            ref={treeAreaRef}
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              width: CANVAS_W,
+              height: CANVAS_H_FOCUS,
+              transform: `scale(${zoom})`,
+              transformOrigin: "0 0",
+            }}
+          >
+            <svg className="absolute inset-0 w-[2000px] h-[1400px]" style={{ zIndex: 2 }}>
+              <defs>
+                <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                  <polygon points="0 0, 10 3.5, 0 7" fill="#0f172a" />
+                </marker>
+              </defs>
+              {renderConnections()}
+            </svg>
+            {visiblePostIts.inTree.map(renderPostIt)}
+          </div>
         </div>
       </div>
 
