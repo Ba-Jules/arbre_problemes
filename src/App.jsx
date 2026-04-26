@@ -2,6 +2,7 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -127,8 +128,21 @@ export default function App() {
   const isDraggingRef = useRef(false);
   const postItsRef = useRef([]);
   const dragStartedInTreeRef = useRef(false);
+  const pendingScrollRef = useRef(null); // { cx, cy, newZoom } — appliqué par useLayoutEffect
 
   useEffect(() => { postItsRef.current = postIts; }, [postIts]);
+
+  // Applique le scroll centré APRÈS le commit React (sizing div déjà mis à jour) et AVANT le paint.
+  // RAF n'est pas assez fiable : le navigateur peut recalculer/clamper scrollLeft entre le commit et le RAF.
+  useLayoutEffect(() => {
+    if (!pendingScrollRef.current) return;
+    const { cx, cy, newZoom } = pendingScrollRef.current;
+    pendingScrollRef.current = null;
+    const scroll = treeScrollRef.current;
+    if (!scroll) return;
+    scroll.scrollLeft = Math.max(0, cx * newZoom - scroll.clientWidth  / 2);
+    scroll.scrollTop  = Math.max(0, cy * newZoom - scroll.clientHeight / 2);
+  }, [zoom]);
 
   // Auto-ajuste le zoom quand on change de layout ou au premier chargement
   useEffect(() => {
@@ -1046,14 +1060,12 @@ export default function App() {
   const zoomAround = (newZoom) => {
     const scroll = treeScrollRef.current;
     if (!scroll) { setZoom(newZoom); return; }
-    // Point du canvas au centre du viewport (coordonnées canvas avant zoom)
+    // Centre viewport en coordonnées canvas (avant zoom)
     const cx = (scroll.scrollLeft + scroll.clientWidth  / 2) / zoom;
     const cy = (scroll.scrollTop  + scroll.clientHeight / 2) / zoom;
+    // Stocker la cible : useLayoutEffect l'appliquera après le commit React
+    pendingScrollRef.current = { cx, cy, newZoom };
     setZoom(newZoom);
-    requestAnimationFrame(() => {
-      scroll.scrollLeft = Math.max(0, cx * newZoom - scroll.clientWidth  / 2);
-      scroll.scrollTop  = Math.max(0, cy * newZoom - scroll.clientHeight / 2);
-    });
   };
 
   const zoomOut = () => zoomAround(Math.max(0.2, +(zoom - 0.1).toFixed(2)));
@@ -1418,6 +1430,14 @@ export default function App() {
               zoomAround(Math.max(0.2, Math.min(2, +(zoom + delta).toFixed(2))));
             }
           }}
+          onFocus={(e) => {
+            // Bloquer le scrollIntoView auto du navigateur : les positions DOM (transform: scale)
+            // ne correspondent pas aux positions visuelles → le navigateur scrolle trop loin.
+            const scroll = e.currentTarget;
+            const sl = scroll.scrollLeft;
+            const st = scroll.scrollTop;
+            requestAnimationFrame(() => { scroll.scrollLeft = sl; scroll.scrollTop = st; });
+          }}
         >
           {/* div de sizing : dimensions réelles après zoom → scrollbars correctes.
               overflow:hidden indispensable : sans ça, le child absolu (width:2000px
@@ -1505,6 +1525,12 @@ export default function App() {
             const delta = e.deltaY > 0 ? -0.05 : 0.05;
             zoomAround(Math.max(0.2, Math.min(2, +(zoom + delta).toFixed(2))));
           }
+        }}
+        onFocus={(e) => {
+          const scroll = e.currentTarget;
+          const sl = scroll.scrollLeft;
+          const st = scroll.scrollTop;
+          requestAnimationFrame(() => { scroll.scrollLeft = sl; scroll.scrollTop = st; });
         }}
       >
         <div style={{ width: CANVAS_W * zoom, height: CANVAS_H_FOCUS * zoom, position: "relative", flexShrink: 0, overflow: "hidden" }}>
