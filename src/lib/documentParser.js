@@ -18,9 +18,6 @@
  *   - fallback si extraction échoue
  */
 
-// URL du worker PDF résolue par Vite à build time (léger, juste une chaîne)
-import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. EXTRACTION PDF
 // ─────────────────────────────────────────────────────────────────────────────
@@ -32,8 +29,14 @@ let pdfjsWorkerConfigured = false;
  * Limite à 50 pages pour les documents très longs.
  */
 export async function extractTextFromPdf(file) {
-  // Import dynamique : pdfjs n'est chargé que quand un PDF est traité
-  const { getDocument, GlobalWorkerOptions } = await import('pdfjs-dist');
+  // Import dynamique : pdfjs + URL worker chargés uniquement à la demande.
+  // L'import ?url en top-level causait un crash au démarrage sur Safari/iOS
+  // (new URL(…, import.meta.url) évalué avant que le module soit prêt).
+  const [{ getDocument, GlobalWorkerOptions }, { default: pdfjsWorkerUrl }] =
+    await Promise.all([
+      import('pdfjs-dist'),
+      import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
+    ]);
 
   if (!pdfjsWorkerConfigured) {
     GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
