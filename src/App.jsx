@@ -570,7 +570,8 @@ export default function App() {
     const draggedItem = postIts.find((item) => item.id === postItId);
     dragStartedInTreeRef.current = draggedItem?.isInTree ?? false;
     const rect = e.currentTarget.getBoundingClientRect();
-    setDragOffset({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    // Offset en coordonnées CANVAS pour que le drag soit correct à tout niveau de zoom.
+    setDragOffset({ x: (e.clientX - rect.left) / zoom, y: (e.clientY - rect.top) / zoom });
   };
 
   const handleMouseMove = useCallback(
@@ -708,7 +709,7 @@ export default function App() {
     setIsDragging(true);
     isDraggingRef.current = true;
     const rect = e.currentTarget.getBoundingClientRect();
-    setDragOffset({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    setDragOffset({ x: (e.clientX - rect.left) / zoom, y: (e.clientY - rect.top) / zoom });
   };
 
   /** Génère (ou régénère) l'arbre à objectifs depuis l'arbre à problèmes courant. */
@@ -1417,10 +1418,34 @@ export default function App() {
     const wrap = treeScrollRef.current;
     if (!wrap) return;
     const canvasH = layoutMode === "focus" ? CANVAS_H_FOCUS : CANVAS_H_CLASSIC;
-    const factor = Math.max(0.2, Math.min(2, Math.min(wrap.clientWidth / CANVAS_W, wrap.clientHeight / canvasH)));
-    setZoom(+factor.toFixed(2));
-    // Après ajustement, remettre le scroll à l'origine
-    requestAnimationFrame(() => { if (wrap) { wrap.scrollLeft = 0; wrap.scrollTop = 0; } });
+    const PAD = 60; // marge autour du contenu
+
+    const inTree = postIts.filter((p) => p.isInTree);
+    if (inTree.length > 0) {
+      // Ajuste sur la boite englobante des étiquettes réellement placées
+      const minX = Math.max(0, Math.min(...inTree.map((p) => p.x)) - PAD);
+      const maxX = Math.min(CANVAS_W, Math.max(...inTree.map((p) => (p.x || 0) + POSTIT_W)) + PAD);
+      const minY = Math.max(0, Math.min(...inTree.map((p) => p.y)) - PAD);
+      const maxY = Math.min(canvasH, Math.max(...inTree.map((p) => (p.y || 0) + POSTIT_H)) + PAD);
+      const contentW = maxX - minX;
+      const contentH = maxY - minY;
+      const factor = Math.max(0.3, Math.min(2, Math.min(
+        wrap.clientWidth  / contentW,
+        wrap.clientHeight / contentH
+      )));
+      setZoom(+factor.toFixed(2));
+      requestAnimationFrame(() => {
+        if (wrap) {
+          wrap.scrollLeft = Math.max(0, minX * factor - PAD / 2);
+          wrap.scrollTop  = Math.max(0, minY * factor - PAD / 2);
+        }
+      });
+    } else {
+      // Canvas vide : zoom confortable (min 50%) centré en haut à gauche
+      const factor = Math.max(0.5, Math.min(2, Math.min(wrap.clientWidth / CANVAS_W, wrap.clientHeight / canvasH)));
+      setZoom(+factor.toFixed(2));
+      requestAnimationFrame(() => { if (wrap) { wrap.scrollLeft = 0; wrap.scrollTop = 0; } });
+    }
   };
 
   /* ========================= Auto-layout intelligent ========================= */
