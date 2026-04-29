@@ -31,6 +31,7 @@ import {
   generateObjectiveTree,
   transformProblemLabelToObjectiveLabel,
 } from "./lib/objectiveTransformer";
+import { detectStrategies, STRATEGY_COLORS } from "./lib/strategyDetector";
 import {
   Paintbrush,
   Link2,
@@ -177,6 +178,8 @@ export default function App() {
   const [editingObjectiveId, setEditingObjectiveId] = useState(null);
   const [editingObjectiveText, setEditingObjectiveText] = useState("");
   const [showRegenConfirm, setShowRegenConfirm] = useState(false);
+  const [strategies, setStrategies] = useState([]);       // stratégies détectées
+  const [showStrategies, setShowStrategies] = useState(true); // toggle visuel
 
   /* -------- Analyse autonome (via URL) -------- */
   const [standaloneAnalysis, setStandaloneAnalysis] = useState(false);
@@ -303,6 +306,7 @@ export default function App() {
     setTheme("");
     setObjectiveNodes([]);
     setObjectiveConnections([]);
+    setStrategies([]);
     setTreeMode("problems");
     setShowQR(false);
     setIsConnecting(false);
@@ -346,6 +350,9 @@ export default function App() {
           }
           if (Array.isArray(data.objectiveConnections)) {
             setObjectiveConnections(data.objectiveConnections);
+          }
+          if (Array.isArray(data.strategies)) {
+            setStrategies(data.strategies);
           }
           if (mode !== "participant" && !(data.projectName || data.theme)) {
             setShowPresentation(true);
@@ -404,14 +411,14 @@ export default function App() {
       try {
         await setDoc(
           doc(db, "sessions", sessionId),
-          { objectiveNodes, objectiveConnections },
+          { objectiveNodes, objectiveConnections, strategies },
           { merge: true }
         );
       } catch {}
     }, 800);
     return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [objectiveNodes, objectiveConnections]);
+  }, [objectiveNodes, objectiveConnections, strategies]);
 
   /* ========================= Présence (participants connectés) ========================= */
   useEffect(() => {
@@ -759,8 +766,16 @@ export default function App() {
     const result = generateObjectiveTree(postIts, connections);
     setObjectiveNodes(result.nodes);
     setObjectiveConnections(result.connections);
+    setStrategies([]); // stratégies précédentes invalidées
     setTreeMode("objectives");
     setShowRegenConfirm(false);
+  };
+
+  /** Détecte et stocke les stratégies à partir de l'arbre à objectifs courant. */
+  const handleDetectStrategies = () => {
+    const result = detectStrategies(objectiveNodes, objectiveConnections, 3);
+    setStrategies(result);
+    setShowStrategies(true);
   };
 
   /**
@@ -905,6 +920,22 @@ export default function App() {
 
   /* ========================= Rendu arbre à objectifs ========================= */
 
+  /**
+   * Map nodeId → stratégie (la meilleure stratégie qui inclut ce nœud).
+   * Priorité = stratégie d'index le plus bas (meilleur score).
+   */
+  const nodeStrategyMap = useMemo(() => {
+    if (!showStrategies || strategies.length === 0) return {};
+    const map = {};
+    // Parcourir en ordre inverse pour que la meilleure (index 0) écrase les autres
+    for (let i = strategies.length - 1; i >= 0; i--) {
+      for (const nodeId of strategies[i].nodes) {
+        map[nodeId] = strategies[i];
+      }
+    }
+    return map;
+  }, [strategies, showStrategies]);
+
   /** Couleur du point de statut de validation */
   const VALIDATION_DOT = {
     generated: "#94a3b8",   // slate  – généré, non relu
@@ -968,10 +999,18 @@ export default function App() {
   };
 
   const renderObjectivePostIt = (n) => {
-    const color     = COLOR_PALETTE[n.color] || COLOR_PALETTE.green;
-    const dotColor  = VALIDATION_DOT[n.validation?.status || "generated"];
-    const typeLabel = OBJECTIVE_TYPE_LABEL[n.objectiveType] || "OBJECTIF";
+    const color      = COLOR_PALETTE[n.color] || COLOR_PALETTE.green;
+    const dotColor   = VALIDATION_DOT[n.validation?.status || "generated"];
+    const typeLabel  = OBJECTIVE_TYPE_LABEL[n.objectiveType] || "OBJECTIF";
     const isValidated = n.validation?.status === "validated";
+    const strategy   = nodeStrategyMap[n.id] || null;
+
+    // Outline : stratégie > validation > défaut
+    const outlineStyle = strategy
+      ? `3px solid ${strategy.color.border}`
+      : isValidated
+      ? "2px solid #16a34a"
+      : "none";
 
     return (
       <div
@@ -992,15 +1031,24 @@ export default function App() {
           className="rounded-lg p-3 shadow-lg border-2 relative group"
           style={{
             backgroundColor: color.bg,
-            borderColor: isValidated ? "#16a34a" : color.border,
+            borderColor: strategy ? strategy.color.border : isValidated ? "#16a34a" : color.border,
             color: "#111827",
             fontFamily: "'Arial Black', Arial, sans-serif",
             lineHeight: 1.2,
             WebkitFontSmoothing: "antialiased",
             textRendering: "optimizeLegibility",
-            outline: isValidated ? "2px solid #16a34a" : "none",
+            outline: outlineStyle,
           }}
         >
+          {/* Badge stratégie */}
+          {strategy && !exportMode && (
+            <div
+              className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded-full text-[8px] font-black uppercase tracking-wider whitespace-nowrap pointer-events-none"
+              style={{ backgroundColor: strategy.color.bg, color: strategy.color.text }}
+            >
+              {strategy.color.label}
+            </div>
+          )}
           {/* Point de statut validation */}
           <div
             className="absolute top-1.5 left-1.5 w-2.5 h-2.5 rounded-full border border-white/60"
@@ -1753,6 +1801,15 @@ export default function App() {
             sourceType: n.sourceType,
           })),
       },
+      strategies: strategies.map((s) => ({
+        id: s.id,
+        nodes: s.nodes,
+        score: s.score,
+        impact: s.impact,
+        length: s.length,
+        color: s.color.bg,
+        label: s.color.label,
+      })),
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -2014,10 +2071,31 @@ export default function App() {
               <button className="px-2 py-0.5 rounded bg-violet-600 text-white text-xs font-semibold" onClick={autoLayoutObjectives} title="Centrer et organiser les objectifs">Centrer</button>
               <button className="px-2 py-0.5 rounded bg-green-700 text-white text-xs font-semibold" onClick={handleGenerateObjectiveTree} title="Régénérer depuis l’arbre à problèmes">Régénérer</button>
               <div className="w-px h-5 bg-slate-300 mx-1" />
+              {/* Bouton détection stratégies */}
+              <button
+                className="px-2 py-0.5 rounded bg-violet-700 text-white text-xs font-semibold"
+                onClick={handleDetectStrategies}
+                title="Identifier automatiquement les meilleures stratégies"
+              >🎯 Stratégies</button>
+              {strategies.length > 0 && (
+                <button
+                  className={`px-2 py-0.5 rounded text-xs font-semibold border ${showStrategies ? "bg-violet-100 text-violet-700 border-violet-300" : "bg-slate-100 text-slate-500 border-slate-300"}`}
+                  onClick={() => setShowStrategies((v) => !v)}
+                  title={showStrategies ? "Masquer les stratégies" : "Afficher les stratégies"}
+                >{showStrategies ? "Masquer" : "Afficher"}</button>
+              )}
+              <div className="w-px h-5 bg-slate-300 mx-1" />
               <button className="px-2 py-0.5 rounded bg-indigo-600 text-white" onClick={exportTreeAsPDF} title="Exporter l’arbre à objectifs en PDF">PDF</button>
               <button className="px-2 py-0.5 rounded bg-emerald-600 text-white" onClick={exportTreeAsPNG} title="Exporter l’arbre à objectifs en PNG">PNG</button>
-              {/* Légende statuts */}
-              <div className="ml-auto flex items-center gap-2 text-[10px] text-slate-500">
+              {/* Légende statuts + stratégies */}
+              <div className="ml-auto flex items-center gap-2 text-[10px] text-slate-500 flex-wrap">
+                {showStrategies && strategies.map((s) => (
+                  <span key={s.id} className="inline-flex items-center gap-1 font-semibold" style={{ color: s.color.bg }}>
+                    <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ backgroundColor: s.color.bg }} />
+                    {s.color.label} (score {s.score.toFixed(2)})
+                  </span>
+                ))}
+                {strategies.length > 0 && <span className="text-slate-300">|</span>}
                 <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-400 inline-block"/>=généré</span>
                 <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500 inline-block"/>=validé</span>
                 <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block"/>=à revoir</span>
@@ -2247,7 +2325,23 @@ export default function App() {
           <>
             <button className="px-2 py-0.5 rounded bg-violet-600 text-white font-semibold" onClick={autoLayoutObjectives}>Centrer</button>
             <button className="px-2 py-0.5 rounded bg-green-700 text-white font-semibold" onClick={handleGenerateObjectiveTree}>Régénérer</button>
+            <button
+              className="px-2 py-0.5 rounded bg-violet-700 text-white font-semibold text-xs"
+              onClick={handleDetectStrategies}
+              title="Identifier automatiquement les meilleures stratégies"
+            >🎯 Stratégies</button>
+            {strategies.length > 0 && (
+              <button
+                className={`px-2 py-0.5 rounded text-xs font-semibold border ${showStrategies ? "bg-violet-100 text-violet-700 border-violet-300" : "bg-slate-100 text-slate-500 border-slate-300"}`}
+                onClick={() => setShowStrategies((v) => !v)}
+              >{showStrategies ? "Masquer" : "Afficher"}</button>
+            )}
             <span className="text-green-700 font-bold">Arbre à Objectifs</span>
+            {showStrategies && strategies.length > 0 && strategies.map((s) => (
+              <span key={s.id} className="inline-flex items-center gap-1 text-[10px] font-semibold" style={{ color: s.color.bg }}>
+                <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: s.color.bg }} />{s.color.label}
+              </span>
+            ))}
           </>
         )}
         <div className="w-px h-4 bg-slate-300 mx-1" />
