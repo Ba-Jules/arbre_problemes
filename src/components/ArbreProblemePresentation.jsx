@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Play, X, QrCode, Sparkles, ArrowRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Play, X, QrCode, Sparkles, ArrowRight, ExternalLink } from "lucide-react";
 import QRCodeGenerator from "./QRCodeGenerator";
 import WorkshopContextCard, { AIConfigPanel } from "./WorkshopContextCard";
 import { buildWorkshopContext } from "../lib/documentParser";
@@ -352,13 +352,34 @@ const ArbreProblemePresentation = ({
                 <div className="shrink-0">
                   <QRCodeGenerator url={participantUrl} />
                 </div>
-                <div className="text-xs text-gray-600 leading-relaxed">
-                  <p className="mb-2">
+                <div className="text-xs text-gray-600 leading-relaxed space-y-2">
+                  <p>
                     Demandez aux participants de{" "}
                     <strong>scanner</strong> ce QR code pour rejoindre
                     l’atelier en mode <em>participant</em>.
                   </p>
-                  <p className="break-all font-mono text-gray-400">
+                  {/* Avertissement localhost */}
+                  {(participantUrl.includes("localhost") || participantUrl.includes("127.0.0.1")) && (
+                    <div className="flex items-start gap-1.5 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-amber-700">
+                      <span className="shrink-0 font-bold">&#9888;</span>
+                      <span>
+                        URL locale détectée ! Les participants ne pourront pas scanner ce QR depuis leurs appareils.
+                        Déployez l’application ou utilisez votre IP locale : <strong>http://[votre-ip]:5173</strong>
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <a
+                      href={participantUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-600 border border-indigo-200 hover:bg-indigo-100 transition-colors font-medium"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      Tester le lien participant
+                    </a>
+                  </div>
+                  <p className="break-all font-mono text-gray-400 text-[10px] leading-relaxed">
                     {participantUrl}
                   </p>
                 </div>

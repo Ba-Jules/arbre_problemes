@@ -105,9 +105,14 @@ const defaultPanelStates = {
 /* ========================= App ========================= */
 
 export default function App() {
-  /* -------- Mode & session -------- */
-  const [mode, setMode] = useState("moderator"); // "moderator" | "participant"
-  const [sessionId, setSessionId] = useState("PROBLEM-TREE-2025");
+  /* -------- Mode & session (initialisés depuis l'URL dès le 1er rendu) -------- */
+  const [mode, setMode] = useState(() => {
+    const m = new URLSearchParams(window.location.search).get("mode");
+    return m === "participant" ? "participant" : "moderator";
+  });
+  const [sessionId, setSessionId] = useState(() => {
+    return new URLSearchParams(window.location.search).get("session") || "PROBLEM-TREE-2025";
+  });
 
   /* -------- Données Firestore -------- */
   const [postIts, setPostIts] = useState([]);
