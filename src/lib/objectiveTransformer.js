@@ -671,6 +671,7 @@ export function generateObjectiveTree(problemPostIts, problemConns) {
       // ── Traçabilité (obligatoire) ─────────────────────────────────────
       sourceProblemNodeId: p.id,
       sourceLabel: p.content,
+      sourceType: p.category === "problem" ? "problem" : p.category === "causes" ? "cause" : "consequence",
       // ── Contenu ───────────────────────────────────────────────────────
       content: transformedLabel,      // compatibilité champ "content" existant
       objectiveType,                  // "central" | "means" | "ends"

@@ -95,6 +95,12 @@ const CATEGORY_DEFAULT_COLOR = {
   consequences: "amber", // ← CONSEQUENCES en orange/ambre
 };
 
+const SOURCE_TYPE_LABEL = {
+  problem:     "Problème central",
+  cause:       "Cause",
+  consequence: "Conséquence",
+};
+
 const defaultPanelStates = {
   causes: "normal",
   tree: "normal",
@@ -170,6 +176,7 @@ export default function App() {
   const [objectiveConnections, setObjectiveConnections] = useState([]);
   const [editingObjectiveId, setEditingObjectiveId] = useState(null);
   const [editingObjectiveText, setEditingObjectiveText] = useState("");
+  const [showRegenConfirm, setShowRegenConfirm] = useState(false);
 
   /* -------- Analyse autonome (via URL) -------- */
   const [standaloneAnalysis, setStandaloneAnalysis] = useState(false);
@@ -186,6 +193,8 @@ export default function App() {
 
   /* -------- Refs -------- */
   const treeAreaRef = useRef(null);
+  /* Skip the very first auto-save run (mount) to avoid overwriting Firebase data */
+  const skipObjSaveRef = useRef(true);
   const selectedPostItRef = useRef(null);
   const isDraggingRef = useRef(false);
   const postItsRef = useRef([]);
@@ -292,6 +301,9 @@ export default function App() {
     setConnections([]);
     setProjectName("");
     setTheme("");
+    setObjectiveNodes([]);
+    setObjectiveConnections([]);
+    setTreeMode("problems");
     setShowQR(false);
     setIsConnecting(false);
     setConnectSourceId(null);
@@ -327,6 +339,14 @@ export default function App() {
           const data = snap.data();
           setProjectName(data.projectName || "");
           setTheme(data.theme || "");
+          // Restore objective tree (persisted as arrays on the session doc)
+          if (Array.isArray(data.objectiveNodes) && data.objectiveNodes.length > 0) {
+            skipObjSaveRef.current = true; // don't re-save what we just loaded
+            setObjectiveNodes(data.objectiveNodes);
+          }
+          if (Array.isArray(data.objectiveConnections)) {
+            setObjectiveConnections(data.objectiveConnections);
+          }
           if (mode !== "participant" && !(data.projectName || data.theme)) {
             setShowPresentation(true);
           }
@@ -371,6 +391,28 @@ export default function App() {
       unsubC();
     };
   }, [sessionId]);
+  /* ========================= Persistance arbre à objectifs ========================= */
+
+  useEffect(() => {
+    // Skip the mount render and any restore-triggered render
+    if (skipObjSaveRef.current) {
+      skipObjSaveRef.current = false;
+      return;
+    }
+    if (!sessionId) return;
+    const t = setTimeout(async () => {
+      try {
+        await setDoc(
+          doc(db, "sessions", sessionId),
+          { objectiveNodes, objectiveConnections },
+          { merge: true }
+        );
+      } catch {}
+    }, 800);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objectiveNodes, objectiveConnections]);
+
   /* ========================= Présence (participants connectés) ========================= */
   useEffect(() => {
     if (!sessionId) return;
@@ -712,12 +754,25 @@ export default function App() {
     setDragOffset({ x: (e.clientX - rect.left) / zoom, y: (e.clientY - rect.top) / zoom });
   };
 
-  /** Génère (ou régénère) l'arbre à objectifs depuis l'arbre à problèmes courant. */
-  const handleGenerateObjectiveTree = () => {
+  /** Effectue la (ré)génération effective de l'arbre à objectifs. */
+  const doGenerateObjectiveTree = () => {
     const result = generateObjectiveTree(postIts, connections);
     setObjectiveNodes(result.nodes);
     setObjectiveConnections(result.connections);
     setTreeMode("objectives");
+    setShowRegenConfirm(false);
+  };
+
+  /**
+   * Point d'entrée du bouton Objectifs / Régénérer.
+   * Si un arbre existe déjà, demande confirmation avant d'écraser.
+   */
+  const handleGenerateObjectiveTree = () => {
+    if (objectiveNodes.length > 0) {
+      setShowRegenConfirm(true);
+    } else {
+      doGenerateObjectiveTree();
+    }
   };
 
   /** Repositionne les nœuds objectifs : ends en haut, central au centre, means en bas. */
@@ -1035,6 +1090,27 @@ export default function App() {
           <div className="absolute left-2 bottom-0.5 text-[8px] font-black uppercase tracking-wider opacity-50 pointer-events-none">
             {typeLabel}
           </div>
+
+          {/* Bouton info source */}
+          {!exportMode && n.sourceLabel && (
+            <div className="absolute bottom-0.5 right-0.5 group/src z-10">
+              <button
+                type="button"
+                className="w-4 h-4 bg-black/40 text-white rounded-full text-[9px] font-bold flex items-center justify-center hover:bg-black/70 transition-colors"
+                onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                onClick={(e) => e.stopPropagation()}
+                title={`Origine : "${n.sourceLabel}" — ${SOURCE_TYPE_LABEL[n.sourceType] || n.sourceType || ""}`}
+                aria-label="Voir l'étiquette d'origine"
+              >i</button>
+              {/* Tooltip CSS — s'affiche au survol du bouton */}
+              <div className="absolute bottom-5 right-0 w-52 bg-slate-800 text-white rounded-lg shadow-xl px-2.5 py-2 text-[10px] pointer-events-none opacity-0 group-hover/src:opacity-100 transition-opacity duration-150 z-50 whitespace-normal leading-relaxed">
+                <div className="text-slate-400 font-semibold mb-0.5">Étiquette d'origine :</div>
+                <div className="italic">&ldquo;{n.sourceLabel}&rdquo;</div>
+                <div className="text-slate-400 font-semibold mt-1.5 mb-0.5">Type source :</div>
+                <div>{SOURCE_TYPE_LABEL[n.sourceType] || n.sourceType || "—"}</div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -1646,6 +1722,45 @@ export default function App() {
     } finally {
       afterCapture();
     }
+  };
+
+  const exportSessionAsJSON = () => {
+    const payload = {
+      sessionId,
+      projectName,
+      theme,
+      exportedAt: new Date().toISOString(),
+      problemTree: {
+        postIts: postIts.map(({ id, content, category, isInTree, x, y, color }) => ({
+          id, content, category, isInTree, x, y, color,
+        })),
+        connections: connections.map(({ id, fromId, toId }) => ({ id, fromId, toId })),
+      },
+      objectiveTree: {
+        nodes: objectiveNodes.map(({ id, content, objectiveType, sourceType, sourceProblemNodeId, sourceLabel, x, y, color, validation }) => ({
+          id, content, objectiveType, sourceType, sourceProblemNodeId, sourceLabel, x, y, color,
+          validation: { status: validation?.status, desirable: validation?.desirable, feasible: validation?.feasible, logical: validation?.logical },
+        })),
+        connections: objectiveConnections.map(({ id, fromId, toId }) => ({ id, fromId, toId })),
+        sourceMapping: objectiveNodes
+          .filter((n) => n.sourceProblemNodeId)
+          .map((n) => ({
+            objectiveNodeId: n.id,
+            objectiveLabel: n.content,
+            objectiveType: n.objectiveType,
+            sourceProblemNodeId: n.sourceProblemNodeId,
+            sourceLabel: n.sourceLabel,
+            sourceType: n.sourceType,
+          })),
+      },
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `arbre-${sessionId}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const visiblePostIts = {
@@ -2400,7 +2515,7 @@ export default function App() {
 
           {/* ── 8. CTAs — Analyse + Objectifs ── */}
           <div className="flex items-center gap-2 pl-3 shrink-0">
-            {/* Retour aux problèmes (visible seulement en mode objectifs) */}
+            {/* Retour aux problèmes (mode objectifs uniquement) */}
             {treeMode === "objectives" && (
               <button
                 type="button"
@@ -2413,26 +2528,54 @@ export default function App() {
               </button>
             )}
 
-            {/* Bouton Objectifs */}
+            {/* Bouton navigation vers objectifs existants (mode problèmes + arbre existe) */}
+            {treeMode === "problems" && objectiveNodes.length > 0 && (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors"
+                onClick={() => setTreeMode("objectives")}
+                title="Voir l'arbre à objectifs existant"
+              >
+                <Target className="w-3.5 h-3.5" />
+                <span>Objectifs ✓</span>
+              </button>
+            )}
+
+            {/* Bouton Générer (mode problèmes, aucun arbre) ou Régénérer (mode objectifs) */}
+            {(treeMode === "objectives" || objectiveNodes.length === 0) && (
+              <button
+                type="button"
+                className={[
+                  "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors",
+                  treeMode === "objectives"
+                    ? "bg-emerald-700 hover:bg-emerald-800 text-white"
+                    : "bg-emerald-600 hover:bg-emerald-700 text-white",
+                  !postIts.some((p) => p.isInTree) ? "opacity-50 cursor-not-allowed" : "",
+                ].join(" ")}
+                onClick={handleGenerateObjectiveTree}
+                disabled={!postIts.some((p) => p.isInTree)}
+                title={
+                  treeMode === "objectives"
+                    ? "Régénérer l'arbre à objectifs (remplacera les modifications)"
+                    : "Générer l'arbre à objectifs"
+                }
+              >
+                {treeMode === "objectives"
+                  ? <RefreshCw className="w-3.5 h-3.5" />
+                  : <Target className="w-3.5 h-3.5" />}
+                <span>{treeMode === "objectives" ? "Régénérer" : "Objectifs"}</span>
+              </button>
+            )}
+
+            {/* Export JSON */}
             <button
               type="button"
-              className={[
-                "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors",
-                treeMode === "objectives"
-                  ? "bg-emerald-700 text-white"
-                  : "bg-emerald-600 hover:bg-emerald-700 text-white",
-                !postIts.some((p) => p.isInTree) ? "opacity-50 cursor-not-allowed" : "",
-              ].join(" ")}
-              onClick={handleGenerateObjectiveTree}
-              disabled={!postIts.some((p) => p.isInTree)}
-              title={
-                treeMode === "objectives"
-                  ? "Régénérer l'arbre à objectifs"
-                  : "Générer l'arbre à objectifs"
-              }
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors"
+              onClick={exportSessionAsJSON}
+              title="Exporter la session en JSON (arbre à problèmes + arbre à objectifs)"
             >
-              <Target className="w-3.5 h-3.5" />
-              <span>{treeMode === "objectives" ? "Régénérer" : "Objectifs"}</span>
+              <Folder className="w-3.5 h-3.5" />
+              <span className="hidden lg:inline">JSON</span>
             </button>
 
             {/* Bouton Analyser */}
@@ -2663,6 +2806,33 @@ export default function App() {
           </div>
         );
       })()}
+
+      {/* ── Confirmation régénération arbre à objectifs ── */}
+      {showRegenConfirm && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
+          <div className="bg-white rounded-xl shadow-xl w-[440px] p-5">
+            <div className="font-bold text-base mb-2 text-amber-700">⚠ Régénérer l'arbre à objectifs ?</div>
+            <p className="text-sm text-slate-600 mb-4">
+              Un arbre à objectifs existe déjà. Régénérer <strong>remplacera définitivement</strong> toutes vos
+              modifications, validations et réorganisations actuelles.
+            </p>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                className="px-4 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200"
+                onClick={() => setShowRegenConfirm(false)}
+              >
+                Annuler
+              </button>
+              <button
+                className="px-4 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700"
+                onClick={doGenerateObjectiveTree}
+              >
+                Régénérer quand même
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {pendingReplacement && (() => {
         const existing = postIts.find((p) => p.id === pendingReplacement.existingId);
