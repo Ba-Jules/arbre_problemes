@@ -178,8 +178,9 @@ export default function App() {
   const [editingObjectiveId, setEditingObjectiveId] = useState(null);
   const [editingObjectiveText, setEditingObjectiveText] = useState("");
   const [showRegenConfirm, setShowRegenConfirm] = useState(false);
-  const [strategies, setStrategies] = useState([]);       // stratégies détectées
+  const [strategies, setStrategies] = useState([]);        // stratégies détectées
   const [showStrategies, setShowStrategies] = useState(true); // toggle visuel
+  const [sourcePopoverNodeId, setSourcePopoverNodeId] = useState(null); // tooltip source
 
   /* -------- Analyse autonome (via URL) -------- */
   const [standaloneAnalysis, setStandaloneAnalysis] = useState(false);
@@ -236,6 +237,7 @@ export default function App() {
         setPaintMode(false);
         setEditingId(null);
         setEditingText("");
+        setSourcePopoverNodeId(null);
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -1139,25 +1141,18 @@ export default function App() {
             {typeLabel}
           </div>
 
-          {/* Bouton info source */}
+          {/* Bouton ↩ source — ouvre le popover au clic */}
           {!exportMode && n.sourceLabel && (
-            <div className="absolute bottom-0.5 right-0.5 group/src z-10">
-              <button
-                type="button"
-                className="w-4 h-4 bg-black/40 text-white rounded-full text-[9px] font-bold flex items-center justify-center hover:bg-black/70 transition-colors"
-                onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                onClick={(e) => e.stopPropagation()}
-                title={`Origine : "${n.sourceLabel}" — ${SOURCE_TYPE_LABEL[n.sourceType] || n.sourceType || ""}`}
-                aria-label="Voir l'étiquette d'origine"
-              >i</button>
-              {/* Tooltip CSS — s'affiche au survol du bouton */}
-              <div className="absolute bottom-5 right-0 w-52 bg-slate-800 text-white rounded-lg shadow-xl px-2.5 py-2 text-[10px] pointer-events-none opacity-0 group-hover/src:opacity-100 transition-opacity duration-150 z-50 whitespace-normal leading-relaxed">
-                <div className="text-slate-400 font-semibold mb-0.5">Étiquette d'origine :</div>
-                <div className="italic">&ldquo;{n.sourceLabel}&rdquo;</div>
-                <div className="text-slate-400 font-semibold mt-1.5 mb-0.5">Type source :</div>
-                <div>{SOURCE_TYPE_LABEL[n.sourceType] || n.sourceType || "—"}</div>
-              </div>
-            </div>
+            <button
+              type="button"
+              className="absolute bottom-0.5 right-0.5 w-4 h-4 bg-black/40 text-white rounded-full text-[9px] font-bold flex items-center justify-center hover:bg-black/70 transition-colors z-10"
+              onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setSourcePopoverNodeId((prev) => (prev === n.id ? null : n.id));
+              }}
+              title="Voir le problème source"
+            >↩</button>
           )}
         </div>
       </div>
@@ -2926,6 +2921,48 @@ export default function App() {
                     Enregistrer
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Popover : étiquette problème source ── */}
+      {sourcePopoverNodeId && (() => {
+        const node = objectiveNodes.find((n) => n.id === sourcePopoverNodeId);
+        if (!node) return null;
+        const srcType = SOURCE_TYPE_LABEL[node.sourceType] || node.sourceType || "—";
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center"
+            onClick={() => setSourcePopoverNodeId(null)}
+          >
+            <div
+              className="bg-white rounded-xl shadow-2xl border w-[380px] p-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="font-bold text-sm text-slate-700">Étiquette source (problème)</div>
+                <button
+                  className="w-6 h-6 rounded bg-slate-100 text-slate-500 hover:bg-slate-200 flex items-center justify-center"
+                  onClick={() => setSourcePopoverNodeId(null)}
+                >×</button>
+              </div>
+              {/* Étiquette source */}
+              <div className="mb-3 p-3 rounded-lg bg-slate-50 border border-slate-200">
+                <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">{srcType}</div>
+                <div className="font-extrabold text-sm text-slate-800 italic">"{node.sourceLabel}"</div>
+              </div>
+              {/* Flèche de transformation */}
+              <div className="flex items-center justify-center text-slate-400 my-1 text-xs gap-1 font-medium">
+                <span>↓ transformé en objectif ↓</span>
+              </div>
+              {/* Objectif résultant */}
+              <div className="mt-2 p-3 rounded-lg bg-green-50 border border-green-200">
+                <div className="text-[10px] font-semibold text-green-600 uppercase tracking-wider mb-1">
+                  {node.objectiveType === "central" ? "Objectif central" : node.objectiveType === "means" ? "Moyen" : "Fin"}
+                </div>
+                <div className="font-extrabold text-sm text-green-800">"{node.content}"</div>
               </div>
             </div>
           </div>
