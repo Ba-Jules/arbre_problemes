@@ -2661,6 +2661,37 @@ export default function App() {
               </button>
             )}
 
+            {/* Bouton Stratégies (mode objectifs uniquement) */}
+            {treeMode === "objectives" && (
+              <>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white transition-colors"
+                  onClick={handleDetectStrategies}
+                  disabled={objectiveNodes.length === 0}
+                  title="Identifier automatiquement les meilleures stratégies"
+                >
+                  <Target className="w-3.5 h-3.5" />
+                  <span>Stratégies</span>
+                </button>
+                {strategies.length > 0 && (
+                  <button
+                    type="button"
+                    className={[
+                      "inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                      showStrategies
+                        ? "bg-violet-100 text-violet-700 border-violet-300 hover:bg-violet-200"
+                        : "bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200",
+                    ].join(" ")}
+                    onClick={() => setShowStrategies((v) => !v)}
+                    title={showStrategies ? "Masquer les couleurs de stratégies" : "Afficher les couleurs de stratégies"}
+                  >
+                    {showStrategies ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                  </button>
+                )}
+              </>
+            )}
+
             {/* Export JSON */}
             <button
               type="button"
