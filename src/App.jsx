@@ -1414,7 +1414,7 @@ export default function App() {
 
   const zoomOut = () => zoomAround(Math.max(0.2, +(zoom - 0.1).toFixed(2)));
   const zoomIn  = () => zoomAround(Math.min(2,   +(zoom + 0.1).toFixed(2)));
-  const zoomFit = () => {
+  function zoomFit() {
     const wrap = treeScrollRef.current;
     if (!wrap) return;
     const canvasH = layoutMode === "focus" ? CANVAS_H_FOCUS : CANVAS_H_CLASSIC;
@@ -1446,7 +1446,7 @@ export default function App() {
       setZoom(+factor.toFixed(2));
       requestAnimationFrame(() => { if (wrap) { wrap.scrollLeft = 0; wrap.scrollTop = 0; } });
     }
-  };
+  }
 
   /* ========================= Auto-layout intelligent ========================= */
   const autoLayout = async () => {
