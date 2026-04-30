@@ -32,6 +32,7 @@ import {
   transformProblemLabelToObjectiveLabel,
 } from "./lib/objectiveTransformer";
 import { detectStrategies, STRATEGY_COLORS } from "./lib/strategyDetector";
+import { transformWithAIBatched } from "./lib/aiTransformer";
 import {
   Paintbrush,
   Link2,
@@ -187,6 +188,8 @@ export default function App() {
 
   /* -------- Config IA (localStorage) -------- */
   const { config: aiConfig, PROVIDER_DEFAULTS: AI_PROVIDER_DEFAULTS } = useAIConfig();
+  const [isAIGenerating, setIsAIGenerating] = useState(false);
+  const [aiGenerationStatus, setAiGenerationStatus] = useState(""); // message d'avancement
 
   /* -------- Export (PDF/PNG) -------- */
   const [exportMode, setExportMode] = useState(false); // active le rendu sans clamp + hauteurs dynamiques
@@ -764,13 +767,59 @@ export default function App() {
   };
 
   /** Effectue la (ré)génération effective de l'arbre à objectifs. */
-  const doGenerateObjectiveTree = () => {
+  const doGenerateObjectiveTree = async () => {
+    // 1. Génération lexicale de base (synchrone, rapide)
     const result = generateObjectiveTree(postIts, connections);
     setObjectiveNodes(result.nodes);
     setObjectiveConnections(result.connections);
-    setStrategies([]); // stratégies précédentes invalidées
+    setStrategies([]);
     setTreeMode("objectives");
     setShowRegenConfirm(false);
+
+    // 2. Si l'IA est configurée, améliorer les transformations
+    if (aiConfig?.configured && result.nodes.length > 0) {
+      setIsAIGenerating(true);
+      setAiGenerationStatus("L'IA améliore les étiquettes…");
+      try {
+        // Préparer le lot : tous les nœuds avec sourceLabel
+        const labels = result.nodes
+          .filter((n) => n.sourceLabel)
+          .map((n) => ({
+            id: n.id,
+            text: n.sourceLabel,
+            type: n.sourceType, // "problem" | "cause" | "consequence"
+          }));
+
+        const aiMap = await transformWithAIBatched(labels, aiConfig, 20);
+
+        if (aiMap.size > 0) {
+          setObjectiveNodes((prev) =>
+            prev.map((n) => {
+              const aiContent = aiMap.get(n.id);
+              if (!aiContent) return n;
+              return {
+                ...n,
+                content: aiContent,
+                validation: {
+                  ...n.validation,
+                  status: "generated",   // IA a produit → pas to_review
+                  _aiGenerated: true,
+                },
+              };
+            })
+          );
+          setAiGenerationStatus(`✓ ${aiMap.size} étiquette${aiMap.size > 1 ? "s" : ""} améliorée${aiMap.size > 1 ? "s" : ""} par l'IA`);
+        } else {
+          setAiGenerationStatus("IA : aucune amélioration retournée (fallback lexical conservé)");
+        }
+      } catch (err) {
+        console.warn("[IA] Transformation échouée :", err.message);
+        setAiGenerationStatus(`IA indisponible : ${err.message.slice(0, 80)}`);
+      } finally {
+        setIsAIGenerating(false);
+        setTimeout(() => setAiGenerationStatus(""), 5000);
+      }
+    }
   };
 
   /** Détecte et stocke les stratégies à partir de l'arbre à objectifs courant. */
@@ -2577,28 +2626,36 @@ export default function App() {
             <div
               className={[
                 "inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium select-none",
-                aiConfig.configured
-                  ? "bg-emerald-50 text-emerald-700"
-                  : "bg-amber-50 text-amber-600",
+                isAIGenerating
+                  ? "bg-indigo-50 text-indigo-700"
+                  : aiConfig.configured
+                    ? "bg-emerald-50 text-emerald-700"
+                    : "bg-amber-50 text-amber-600",
               ].join(" ")}
               title={
-                aiConfig.configured
-                  ? `IA configurée : ${AI_PROVIDER_DEFAULTS[aiConfig.provider]?.label || aiConfig.provider}`
-                  : "IA non configurée — lancez une nouvelle session pour configurer"
+                isAIGenerating
+                  ? aiGenerationStatus
+                  : aiConfig.configured
+                    ? `IA configurée : ${AI_PROVIDER_DEFAULTS[aiConfig.provider]?.label || aiConfig.provider}`
+                    : "IA non configurée — lancez une nouvelle session pour configurer"
               }
             >
-              <Bot className="w-3.5 h-3.5 shrink-0" />
+              <Bot className={["w-3.5 h-3.5 shrink-0", isAIGenerating ? "animate-spin" : ""].join(" ")} />
               <span className="hidden md:inline">
-                {aiConfig.configured
-                  ? (AI_PROVIDER_DEFAULTS[aiConfig.provider]?.label || aiConfig.provider)
-                  : "IA"}
+                {isAIGenerating
+                  ? (aiGenerationStatus || "IA…")
+                  : aiConfig.configured
+                    ? (AI_PROVIDER_DEFAULTS[aiConfig.provider]?.label || aiConfig.provider)
+                    : "IA"}
               </span>
-              <span
-                className={[
-                  "w-1.5 h-1.5 rounded-full shrink-0",
-                  aiConfig.configured ? "bg-emerald-500" : "bg-amber-400",
-                ].join(" ")}
-              />
+              {!isAIGenerating && (
+                <span
+                  className={[
+                    "w-1.5 h-1.5 rounded-full shrink-0",
+                    aiConfig.configured ? "bg-emerald-500" : "bg-amber-400",
+                  ].join(" ")}
+                />
+              )}
             </div>
           </div>
 
@@ -2642,11 +2699,13 @@ export default function App() {
                   !postIts.some((p) => p.isInTree) ? "opacity-50 cursor-not-allowed" : "",
                 ].join(" ")}
                 onClick={handleGenerateObjectiveTree}
-                disabled={!postIts.some((p) => p.isInTree)}
+                disabled={!postIts.some((p) => p.isInTree) || isAIGenerating}
                 title={
-                  treeMode === "objectives"
-                    ? "Régénérer l'arbre à objectifs (remplacera les modifications)"
-                    : "Générer l'arbre à objectifs"
+                  isAIGenerating
+                    ? "Génération IA en cours…"
+                    : treeMode === "objectives"
+                      ? "Régénérer l'arbre à objectifs (remplacera les modifications)"
+                      : "Générer l'arbre à objectifs"
                 }
               >
                 {treeMode === "objectives"
@@ -2986,8 +3045,9 @@ export default function App() {
                 Annuler
               </button>
               <button
-                className="px-4 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700"
+                className="px-4 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 disabled:opacity-50"
                 onClick={doGenerateObjectiveTree}
+                disabled={isAIGenerating}
               >
                 Régénérer quand même
               </button>

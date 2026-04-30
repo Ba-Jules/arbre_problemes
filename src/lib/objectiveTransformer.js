@@ -42,12 +42,12 @@ export function analyzeProblemLabel(label) {
 
   /* ── Patterns PRÉFIXE (négation en début de phrase) ── */
   const prefixRules = [
-    // Manque / Absence
-    { re: /^manque\s+d[e']\s*/i,            type: "manque",      structure: "manque_de_X" },
-    { re: /^manque\s+/i,                    type: "manque",      structure: "manque_de_X" },
-    { re: /^absence\s+d[e']\s*/i,           type: "absence",     structure: "absence_de_X" },
-    { re: /^inexistence\s+d[e']\s*/i,       type: "absence",     structure: "absence_de_X" },
-    { re: /^insuffisance\s+d[e']\s*/i,      type: "insuffisance",structure: "manque_de_X" },
+    // Manque / Absence  (couvre : de, du, des, d', de la)
+    { re: /^manque\s+(?:de\s+la\s+|du\s+|des?\s+|d[e']\s*)/i, type: "manque",      structure: "manque_de_X" },
+    { re: /^manque\s+/i,                                        type: "manque",      structure: "manque_de_X" },
+    { re: /^absence\s+(?:de\s+la\s+|du\s+|des?\s+|d[e']\s*)/i,type: "absence",     structure: "absence_de_X" },
+    { re: /^inexistence\s+(?:de\s+la\s+|du\s+|des?\s+|d[e']\s*)/i, type: "absence", structure: "absence_de_X" },
+    { re: /^insuffisance\s+(?:de\s+la\s+|du\s+|des?\s+|d[e']\s*)/i,type:"insuffisance",structure:"manque_de_X"},
     // Quantitatif
     { re: /^faibles?\s+/i,                  type: "faible",      structure: "faible_X" },
     { re: /^insuffisant[e]?\s+/i,           type: "faible",      structure: "faible_X" },
@@ -57,12 +57,16 @@ export function analyzeProblemLabel(label) {
     { re: /^peu\s+d[e']\s*/i,              type: "manque",      structure: "manque_de_X" },
     { re: /^pas\s+d[e']\s*/i,              type: "absence",     structure: "absence_de_X" },
     { re: /^aucun[e]?\s+/i,                type: "absence",     structure: "absence_de_X" },
-    // Baisse / Perte
-    { re: /^baisse\s+d(?:es?|[e'])\s*/i,   type: "baisse",      structure: "baisse_de_X" },
-    { re: /^déclin\s+d(?:es?|[e'])\s*/i,   type: "baisse",      structure: "baisse_de_X" },
-    { re: /^perte\s+d(?:es?|[e'])\s*/i,    type: "perte",       structure: "perte_de_X" },
-    { re: /^dégradation\s+d(?:es?|[e'])\s*/i, type: "dégradation", structure: "baisse_de_X" },
-    { re: /^détérioration\s+d(?:es?|[e'])\s*/i, type: "dégradation", structure: "baisse_de_X" },
+    // Baisse / Perte / Diminution  (couvre : de, du, des, d', de la)
+    { re: /^baisse\s+(?:de\s+la\s+|du\s+|des?\s+|d[e']\s*)/i,        type: "baisse",      structure: "baisse_de_X" },
+    { re: /^déclin\s+(?:de\s+la\s+|du\s+|des?\s+|d[e']\s*)/i,        type: "baisse",      structure: "baisse_de_X" },
+    { re: /^diminution\s+(?:de\s+la\s+|du\s+|des?\s+|d[e']\s*)/i,    type: "baisse",      structure: "baisse_de_X" },
+    { re: /^réduction\s+(?:de\s+la\s+|du\s+|des?\s+|d[e']\s*)/i,     type: "baisse",      structure: "baisse_de_X" },
+    { re: /^chute\s+(?:de\s+la\s+|du\s+|des?\s+|d[e']\s*)/i,         type: "baisse",      structure: "baisse_de_X" },
+    { re: /^affaiblissement\s+(?:de\s+la\s+|du\s+|des?\s+|d[e']\s*)/i,type:"baisse",      structure: "baisse_de_X" },
+    { re: /^perte\s+(?:de\s+la\s+|du\s+|des?\s+|d[e']\s*)/i,         type: "perte",       structure: "perte_de_X"  },
+    { re: /^dégradation\s+(?:de\s+la\s+|du\s+|des?\s+|d[e']\s*)/i,   type: "dégradation", structure: "baisse_de_X" },
+    { re: /^détérioration\s+(?:de\s+la\s+|du\s+|des?\s+|d[e']\s*)/i, type: "dégradation", structure: "baisse_de_X" },
     // Spéciaux
     { re: /^déficit\s+d(?:es?|[e'])\s*/i,  type: "manque",      structure: "manque_de_X" },
     { re: /^pénurie\s+d(?:es?|[e'])\s*/i,  type: "manque",      structure: "manque_de_X" },
@@ -209,7 +213,7 @@ function guessGender(noun) {
     .replace(/eaux$/, "eau")
     .replace(/[xs]$/, "");
 
-  if (/(ion|ité|ance|ence|esse|ure|ode|ise|tion|sion|ison|tude|ude|ière|ière|ée|eau)$/.test(n)) return "f";
+  if (/(ion|ité|ance|ence|esse|ure|ode|ise|tion|sion|ison|tude|ude|ière|ée)$/.test(n)) return "f";
 
   const feminineWords = [
     "information", "communication", "coordination", "mobilisation", "participation",
@@ -528,6 +532,7 @@ function soundsPositive(label) {
  */
 const NEGATIVE_WORDS_FORBIDDEN = [
   "trop", "peu",
+  "diminution", "réduction", "chute", "déclin", "baisse", "perte",
   "confus", "confuse", "confuses",
   "complexe", "complexes",
   "insuffisant", "insuffisante", "insuffisants", "insuffisantes",

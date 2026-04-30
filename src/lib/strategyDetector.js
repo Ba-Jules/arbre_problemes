@@ -1,13 +1,18 @@
 /**
- * strategyDetector.js — Identification automatique des stratégies
+ * strategyDetector.js — v3 (sous-arbre complet)
  *
- * Approche : graphe NON-DIRIGÉ.
- * Peu importe le sens des connexions (central→means ou means→central),
- * on cherche tous les chemins simples reliant un nœud "means" à un nœud "ends".
- * Le nœud "central" doit obligatoirement être traversé pour que la chaîne soit valide.
+ * Approche :
+ *   1. Pour chaque nœud "means", trouver le cluster de moyens connectés
+ *      (BFS sur les nœuds means uniquement, sans traverser le central).
+ *   2. Vérifier que le cluster atteint le nœud central.
+ *   3. Collecter TOUS les ends accessibles depuis le central (BFS complet
+ *      à travers les ends chaînés).
+ *   4. Stratégie = cluster_means ∪ {central} ∪ all_reachable_ends
  *
- * Score : (fins_couvertes / longueur) + bonus_validation × 0.1
- * Diversité : rejet si similarité Jaccard > 0.65 avec une stratégie déjà choisie
+ * La diversité est calculée sur la partie MEANS uniquement (car le central
+ * et les ends sont partagés entre toutes les stratégies).
+ *
+ * Score : (ends_couverts / total_ends) + (validés / longueur) × 0.2
  */
 
 /* ─── Palette ────────────────────────────────────────────────────────────── */
@@ -17,10 +22,7 @@ export const STRATEGY_COLORS = [
   { id: "s3", bg: "#0891b2", border: "#164e63", text: "#ffffff", label: "Stratégie 3" },
 ];
 
-const MAX_PATHS = 200;
-const MAX_DEPTH = 30;
-
-/* ─── Graphe non-dirigé ──────────────────────────────────────────────────── */
+/* ─── Adjacence non-dirigée ──────────────────────────────────────────────── */
 function buildUndirectedAdj(nodes, connections) {
   const nodeIds = new Set(nodes.map((n) => n.id));
   const adj = {};
@@ -28,65 +30,73 @@ function buildUndirectedAdj(nodes, connections) {
   for (const c of connections) {
     if (nodeIds.has(c.fromId) && nodeIds.has(c.toId)) {
       adj[c.fromId].push(c.toId);
-      adj[c.toId].push(c.fromId);   // ← les deux sens
+      adj[c.toId].push(c.fromId);
     }
   }
   return adj;
 }
 
-/* ─── DFS non-dirigé : de startId vers n'importe quel ends ──────────────── */
 /**
- * Trouve tous les chemins simples allant de startId à un nœud ends.
- * Contrainte : le chemin doit contenir le nœud central (objectif obligatoire).
+ * Trouve le cluster de nœuds "means" connectés à startId,
+ * sans jamais traverser le nœud central ni les ends.
+ * Retourne l'ensemble des IDs de means du cluster.
  */
-function findPathsToEnds(startId, endsIds, centralId, undirectedAdj) {
-  const paths = [];
-  const visited = new Set();
-
-  function dfs(nodeId, currentPath) {
-    if (visited.has(nodeId) || currentPath.length > MAX_DEPTH) return;
-    if (paths.length >= MAX_PATHS) return;
-
-    visited.add(nodeId);
-    currentPath.push(nodeId);
-
-    if (endsIds.has(nodeId)) {
-      // Chemin valide uniquement s'il passe par le central
-      if (!centralId || currentPath.includes(centralId)) {
-        paths.push([...currentPath]);
-      }
-      // Ne pas continuer après un ends
-    } else {
-      for (const next of (undirectedAdj[nodeId] || [])) {
-        dfs(next, currentPath);
-        if (paths.length >= MAX_PATHS) break;
+function getMeansCluster(startId, adj, meansSet) {
+  const cluster = new Set();
+  const queue = [startId];
+  while (queue.length > 0) {
+    const id = queue.shift();
+    if (cluster.has(id)) continue;
+    if (!meansSet.has(id)) continue; // ne traverser que les means
+    cluster.add(id);
+    for (const neighbor of (adj[id] || [])) {
+      if (!cluster.has(neighbor) && meansSet.has(neighbor)) {
+        queue.push(neighbor);
       }
     }
-
-    currentPath.pop();
-    visited.delete(nodeId);
   }
+  return cluster;
+}
 
-  dfs(startId, []);
-  return paths;
+/**
+ * Collecte TOUS les ends accessibles depuis le central,
+ * en traversant les ends chaînés (ends → ends).
+ * Ne remonte pas vers les means.
+ */
+function getAllReachableEnds(centralId, adj, endsSet) {
+  const found = new Set();
+  const queue = [centralId];
+  const visited = new Set([centralId]);
+  while (queue.length > 0) {
+    const id = queue.shift();
+    for (const neighbor of (adj[id] || [])) {
+      if (visited.has(neighbor)) continue;
+      visited.add(neighbor);
+      if (endsSet.has(neighbor)) {
+        found.add(neighbor);
+        queue.push(neighbor); // continuer depuis cet end (ends chaînés)
+      }
+    }
+  }
+  return found;
 }
 
 /* ─── Score ──────────────────────────────────────────────────────────────── */
-function scoreChain(path, endsIds, validatedIds) {
-  const endsCovered = path.filter((id) => endsIds.has(id)).length;
-  const validated   = path.filter((id) => validatedIds.has(id)).length;
-  const length = path.length;
-  if (length === 0) return { impact: 0, length: 0, score: 0 };
-  const score = (endsCovered / length) + (validated / length) * 0.1;
-  return { impact: endsCovered, length, score: +score.toFixed(4) };
+function scoreStrategy(meansCluster, allEnds, validatedIds, totalEnds) {
+  const endsCovered = allEnds.size;
+  const validated   = [...meansCluster, ...allEnds].filter((id) => validatedIds.has(id)).length;
+  const length      = meansCluster.size + 1 + allEnds.size; // means + central + ends
+  const score = (endsCovered / Math.max(totalEnds, 1)) + (validated / Math.max(length, 1)) * 0.2;
+  return { endsCovered, length, score: +score.toFixed(4) };
 }
 
-/* ─── Jaccard ────────────────────────────────────────────────────────────── */
-function jaccardOverlap(a, b) {
-  const sa = new Set(a), sb = new Set(b);
+/* ─── Diversité Jaccard sur la partie MEANS ─────────────────────────────── */
+function jaccardMeans(clusterA, clusterB) {
+  const sa = clusterA instanceof Set ? clusterA : new Set(clusterA);
+  const sb = clusterB instanceof Set ? clusterB : new Set(clusterB);
   const intersect = [...sa].filter((x) => sb.has(x)).length;
   const union = new Set([...sa, ...sb]).size;
-  return union === 0 ? 0 : intersect / union;
+  return union === 0 ? 1 : intersect / union;
 }
 
 /* ─── Point d'entrée ─────────────────────────────────────────────────────── */
@@ -99,62 +109,98 @@ function jaccardOverlap(a, b) {
 export function detectStrategies(nodes, connections, maxCount = 3) {
   if (!nodes?.length) return [];
 
-  const undirectedAdj = buildUndirectedAdj(nodes, connections);
+  const adj = buildUndirectedAdj(nodes, connections);
 
-  const endsIds      = new Set(nodes.filter((n) => n.objectiveType === "ends").map((n) => n.id));
+  const endsSet      = new Set(nodes.filter((n) => n.objectiveType === "ends").map((n) => n.id));
+  const meansSet     = new Set(nodes.filter((n) => n.objectiveType === "means").map((n) => n.id));
   const validatedIds = new Set(nodes.filter((n) => n.validation?.status === "validated").map((n) => n.id));
-  const meansNodes   = nodes.filter((n) => n.objectiveType === "means");
   const centralNode  = nodes.find((n) => n.objectiveType === "central");
   const centralId    = centralNode?.id ?? null;
 
-  // Si pas de fins ou pas de moyens → fallback immédiat
-  if (meansNodes.length === 0 || endsIds.size === 0) {
+  // Fallback : arbre incomplet
+  if (meansSet.size === 0 || endsSet.size === 0) {
     return centralNode ? [{
       id: "strategy-1",
       nodes: nodes.map((n) => n.id),
-      score: 0, impact: 0, length: nodes.length,
+      score: 0, impact: endsSet.size, length: nodes.length,
       color: STRATEGY_COLORS[0],
     }] : [];
   }
 
-  // Trouver toutes les chaînes means → ends
-  const allCandidates = [];
-  for (const m of meansNodes) {
-    const paths = findPathsToEnds(m.id, endsIds, centralId, undirectedAdj);
-    for (const path of paths) {
-      const { impact, length, score } = scoreChain(path, endsIds, validatedIds);
-      allCandidates.push({ nodes: path, impact, length, score });
-    }
-  }
+  // Collecter tous les ends accessibles depuis le central
+  const allReachableEnds = centralId
+    ? getAllReachableEnds(centralId, adj, endsSet)
+    : endsSet;
 
-  // Fallback : pas de chemin complet → une seule stratégie = tous les nœuds
-  if (allCandidates.length === 0) {
+  // Si aucun end n'est relié au central, fallback
+  if (allReachableEnds.size === 0) {
     return [{
       id: "strategy-1",
       nodes: nodes.map((n) => n.id),
-      score: 0,
-      impact: endsIds.size,
-      length: nodes.length,
+      score: 0, impact: endsSet.size, length: nodes.length,
       color: STRATEGY_COLORS[0],
     }];
   }
 
-  // Trier + sélectionner N chaînes diversifiées
-  allCandidates.sort((a, b) => b.score - a.score || b.impact - a.impact);
+  // Trouver les clusters de means
+  const processedMeans = new Set();
+  const allCandidates = [];
 
+  for (const meansId of meansSet) {
+    if (processedMeans.has(meansId)) continue;
+
+    const cluster = getMeansCluster(meansId, adj, meansSet);
+    // Marquer tous les membres du cluster comme traités
+    for (const id of cluster) processedMeans.add(id);
+
+    // Vérifier que le cluster est connecté au central
+    const connectsToCentral = centralId
+      ? [...cluster].some((id) => (adj[id] || []).includes(centralId))
+      : true;
+
+    if (!connectsToCentral) continue;
+
+    const { endsCovered, length, score } = scoreStrategy(
+      cluster, allReachableEnds, validatedIds, endsSet.size
+    );
+
+    const strategyNodes = [
+      ...cluster,
+      ...(centralId ? [centralId] : []),
+      ...allReachableEnds,
+    ];
+
+    allCandidates.push({ cluster, nodes: strategyNodes, endsCovered, length, score });
+  }
+
+  // Fallback : aucun cluster valide trouvé
+  if (allCandidates.length === 0) {
+    return [{
+      id: "strategy-1",
+      nodes: nodes.map((n) => n.id),
+      score: 0, impact: endsSet.size, length: nodes.length,
+      color: STRATEGY_COLORS[0],
+    }];
+  }
+
+  // Trier par score décroissant
+  allCandidates.sort((a, b) => b.score - a.score || b.endsCovered - a.endsCovered);
+
+  // Sélectionner N stratégies diversifiées (diversité sur les means uniquement)
   const selected = [];
   for (const c of allCandidates) {
     if (selected.length >= maxCount) break;
-    if (!selected.some((s) => jaccardOverlap(s.nodes, c.nodes) > 0.65)) {
-      selected.push(c);
-    }
+    const tooSimilar = selected.some(
+      (s) => jaccardMeans(s.cluster, c.cluster) > 0.65
+    );
+    if (!tooSimilar) selected.push(c);
   }
 
   return selected.map((s, i) => ({
     id: `strategy-${i + 1}`,
     nodes: s.nodes,
     score: s.score,
-    impact: s.impact,
+    impact: s.endsCovered,
     length: s.length,
     color: STRATEGY_COLORS[i % STRATEGY_COLORS.length],
   }));
