@@ -82,12 +82,24 @@ function getAllReachableEnds(centralId, adj, endsSet) {
 }
 
 /* ─── Score ──────────────────────────────────────────────────────────────── */
-function scoreStrategy(meansCluster, allEnds, validatedIds, totalEnds) {
-  const endsCovered = allEnds.size;
-  const validated   = [...meansCluster, ...allEnds].filter((id) => validatedIds.has(id)).length;
-  const length      = meansCluster.size + 1 + allEnds.size; // means + central + ends
-  const score = (endsCovered / Math.max(totalEnds, 1)) + (validated / Math.max(length, 1)) * 0.2;
-  return { endsCovered, length, score: +score.toFixed(4) };
+/**
+ * Score basé sur la qualité des moyens, pas sur les fins (qui sont toujours 100%).
+ * - faisabilité (50%) : ratio moyens validés / taille du cluster
+ * - couverture  (30%) : ratio taille du cluster / total des moyens
+ * - impact fixe (20%) : toutes les stratégies couvrent les mêmes fins
+ * - tie-breaker       : hash déterministe sur les IDs du cluster
+ */
+function scoreStrategy(meansCluster, allEnds, validatedIds, totalEnds, totalMeans) {
+  const clusterSize  = meansCluster.size;
+  const validated    = [...meansCluster].filter((id) => validatedIds.has(id)).length;
+  const feasibility  = clusterSize > 0 ? validated / clusterSize : 0;
+  const coverage     = totalMeans  > 0 ? clusterSize / totalMeans : 0;
+  const endsCovered  = allEnds.size;
+  // Tie-breaker déterministe : évite les égalités parfaites entre clusters
+  const idHash = [...meansCluster].sort().join("").split("").reduce((a, c) => a + c.charCodeAt(0), 0);
+  const tieBreaker = (idHash % 1000) / 100000; // 0.00000 – 0.00999
+  const score = feasibility * 0.5 + coverage * 0.3 + 0.2 + tieBreaker;
+  return { endsCovered, length: clusterSize + 1 + endsCovered, score: +score.toFixed(4) };
 }
 
 /* ─── Diversité Jaccard sur la partie MEANS ─────────────────────────────── */
@@ -161,7 +173,7 @@ export function detectStrategies(nodes, connections, maxCount = 3) {
     if (!connectsToCentral) continue;
 
     const { endsCovered, length, score } = scoreStrategy(
-      cluster, allReachableEnds, validatedIds, endsSet.size
+      cluster, allReachableEnds, validatedIds, endsSet.size, meansSet.size
     );
 
     const strategyNodes = [

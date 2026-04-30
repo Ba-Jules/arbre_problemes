@@ -1,5 +1,5 @@
 /**
- * objectiveTransformer.js — v4 (transformation sémantique + antonymie)
+ * objectiveTransformer.js — v5 (suffix complet + retry intelligent + validation mécanique)
  *
  * Architecture :
  *   1. analyzeProblemLabel()         — analyse sémantique du label source
@@ -151,18 +151,21 @@ export function analyzeProblemLabel(label) {
   const adjAntonymSuffixRules = [
     { re: /^(.+?)\s+confus[e]?s?$/i,          antonymBase: "clarifié"    },
     { re: /^(.+?)\s+complexes?$/i,              antonymBase: "simplifié"   },
-    { re: /^(.+?)\s+fréquente?s?$/i,            antonymBase: "optimisé"    },
-    { re: /^(.+?)\s+dégradé[e]?s?$/i,          antonymBase: "amélioré"    },
+    { re: /^(.+?)\s+fréquente?s?$/i,            antonymBase: "rationalisé" },
+    { re: /^(.+?)\s+dégradé[e]?s?$/i,          antonymBase: "maintenu"    },
     { re: /^(.+?)\s+obsolète[s]?$/i,            antonymBase: "modernisé"   },
     { re: /^(.+?)\s+inadapté[e]?s?$/i,         antonymBase: "adapté"      },
     { re: /^(.+?)\s+inadéquat[e]?s?$/i,        antonymBase: "adapté"      },
     { re: /^(.+?)\s+inutile[s]?$/i,             antonymBase: "valorisé"    },
-    { re: /^(.+?)\s+inefficace[s]?$/i,          antonymBase: "optimisé"    },
+    { re: /^(.+?)\s+inefficace[s]?$/i,          antonymBase: "efficace"    },
     { re: /^(.+?)\s+problématique[s]?$/i,       antonymBase: "résolu"      },
-    { re: /^(.+?)\s+défaillant[e]?s?$/i,       antonymBase: "renforcé"    },
-    { re: /^(.+?)\s+lent[e]?s?$/i,             antonymBase: "optimisé"    },
+    { re: /^(.+?)\s+défaillant[e]?s?$/i,       antonymBase: "fonctionnel" },
+    { re: /^(.+?)\s+lent[e]?s?$/i,             antonymBase: "rapide"      },
     { re: /^(.+?)\s+lourd[e]?s?$/i,            antonymBase: "simplifié"   },
     { re: /^(.+?)\s+rigide[s]?$/i,              antonymBase: "adapté"      },
+    { re: /^(.+?)\s+réduit[e]?s?$/i,           antonymBase: "développé"   },
+    { re: /^(.+?)\s+limité[e]?s?$/i,           antonymBase: "étendu"      },
+    { re: /^(.+?)\s+restreint[e]?s?$/i,        antonymBase: "élargi"      },
   ];
 
   for (const { re, antonymBase } of adjAntonymSuffixRules) {
@@ -292,6 +295,11 @@ const ACCORD_TABLE = {
   unifié:      { m: "unifié",      f: "unifiée",      mp: "unifiés",      fp: "unifiées"      },
   résolu:      { m: "résolu",      f: "résolue",      mp: "résolus",      fp: "résolues"      },
   numérisé:    { m: "numérisé",    f: "numérisée",    mp: "numérisés",    fp: "numérisées"    },
+  étendu:      { m: "étendu",      f: "étendue",      mp: "étendus",      fp: "étendues"      },
+  élargi:      { m: "élargi",      f: "élargie",      mp: "élargis",      fp: "élargies"      },
+  fonctionnel: { m: "fonctionnel", f: "fonctionnelle", mp: "fonctionnels", fp: "fonctionnelles" },
+  efficace:    { m: "efficace",    f: "efficace",     mp: "efficaces",    fp: "efficaces"     },
+  rapide:      { m: "rapide",      f: "rapide",       mp: "rapides",      fp: "rapides"       },
 };
 
 function agree(base, noun) {
@@ -680,9 +688,19 @@ function _applyRule(t, analysis, nodeType) {
       if (soundsPositive(t)) return t;
       // Repli prudent : utiliser le nom tête + participe selon nodeType
       if (nodeType === "causes")        return formatFaible(objetPrincipal);
-      if (nodeType === "consequences")  return `${cap(objetPrincipal)} ${agree("amélioré", objetPrincipal)}`;
+      if (nodeType === "consequences")  return `${cap(objetPrincipal)} ${agree("développé", objetPrincipal)}`;
       return `${cap(objetPrincipal)} ${agree("assuré", objetPrincipal)}`;
   }
+}
+
+/**
+ * Retire un adjectif négatif terminal d'une phrase pour obtenir le nom propre.
+ * Ex : "Budget réduit" → "Budget", "Accès limités" → "Accès"
+ */
+function stripNegativeAdjectiveSuffix(phrase) {
+  return phrase
+    .replace(/\s+(?:réduit[e]?s?|limité[e]?s?|restreint[e]?s?|insuffisant[e]?s?|faibles?|absent[e]?s?|dégradé[e]?s?|confus[e]?s?|complexes?|obsolète[s]?|inefficace[s]?|lent[e]?s?|lourd[e]?s?|rigide[s]?|inadapté[e]?s?|fréquente?s?|défaillant[e]?s?)$/i, "")
+    .trim();
 }
 
 /**
@@ -707,10 +725,12 @@ export function transformProblemLabelToObjectiveLabel(label, nodeType) {
 
   // Si la validation échoue, tentative de repli sémantique
   if (!validateObjectiveLabel(t, result).valid) {
-    const objet = analysis.objetPrincipal || t;
+    // Nettoyer l'objetPrincipal de tout adjectif négatif résiduel
+    const rawObjet = stripNegativeAdjectiveSuffix(analysis.objetPrincipal || t);
+    const objet = rawObjet || analysis.objetPrincipal || t;
     const fallback =
       nodeType === "causes"       ? formatFaible(objet) :
-      nodeType === "consequences" ? `${cap(objet)} ${agree("amélioré", objet)}` :
+      nodeType === "consequences" ? `${cap(objet)} ${agree("développé", objet)}` :
                                     formatManque(objet);
     const fallbackFormatted = formatObjectiveLabel(fallback);
     // On accepte le repli même imparfait (sera marqué to_review)

@@ -768,8 +768,11 @@ export default function App() {
 
   /** Effectue la (ré)génération effective de l'arbre à objectifs. */
   const doGenerateObjectiveTree = async () => {
+    console.log("[doGenerateObjectiveTree] Démarrage — objectiveTransformer v5");
+
     // 1. Génération lexicale de base (synchrone, rapide)
     const result = generateObjectiveTree(postIts, connections);
+    console.log("[doGenerateObjectiveTree] Résultat lexical :", result.nodes.map(n => `${n.sourceLabel} → ${n.content}`));
     setObjectiveNodes(result.nodes);
     setObjectiveConnections(result.connections);
     setStrategies([]);
@@ -778,37 +781,52 @@ export default function App() {
 
     // 2. Si l'IA est configurée, améliorer les transformations
     if (aiConfig?.configured && result.nodes.length > 0) {
+      console.log("[doGenerateObjectiveTree] IA configurée, lancement de transformWithAIBatched");
       setIsAIGenerating(true);
       setAiGenerationStatus("L'IA améliore les étiquettes…");
       try {
-        // Préparer le lot : tous les nœuds avec sourceLabel
         const labels = result.nodes
           .filter((n) => n.sourceLabel)
           .map((n) => ({
             id: n.id,
             text: n.sourceLabel,
-            type: n.sourceType, // "problem" | "cause" | "consequence"
+            type: n.sourceType,
           }));
 
         const aiMap = await transformWithAIBatched(labels, aiConfig, 20);
+        console.log("[doGenerateObjectiveTree] aiMap reçu :", Object.fromEntries(aiMap));
 
+        // Mots mécaniques à rejeter dans les sorties IA
+        const MOTS_MECANIQUES = /\b(amélioré[e]?s?|renforcé[e]?s?|optimisé[e]?s?|réduit[e]?s?|confuse?s?|insuffisant[e]?s?|fréquente?s?|faibles?|complexes?)\b/i;
+
+        let accepted = 0;
+        let rejected = 0;
         if (aiMap.size > 0) {
           setObjectiveNodes((prev) =>
             prev.map((n) => {
               const aiContent = aiMap.get(n.id);
               if (!aiContent) return n;
+              if (MOTS_MECANIQUES.test(aiContent)) {
+                console.log(`[IA] Rejeté (mécanique) : "${aiContent}" ← "${n.sourceLabel}"`);
+                rejected++;
+                return n; // conserver le résultat lexical
+              }
+              accepted++;
               return {
                 ...n,
                 content: aiContent,
                 validation: {
                   ...n.validation,
-                  status: "generated",   // IA a produit → pas to_review
+                  status: "generated",
                   _aiGenerated: true,
                 },
               };
             })
           );
-          setAiGenerationStatus(`✓ ${aiMap.size} étiquette${aiMap.size > 1 ? "s" : ""} améliorée${aiMap.size > 1 ? "s" : ""} par l'IA`);
+          const total = accepted + rejected;
+          setAiGenerationStatus(
+            `✓ ${accepted}/${total} étiquette${total > 1 ? "s" : ""} améliorée${total > 1 ? "s" : ""} par l'IA${rejected > 0 ? ` (${rejected} mécaniques ignorées)` : ""}`
+          );
         } else {
           setAiGenerationStatus("IA : aucune amélioration retournée (fallback lexical conservé)");
         }
@@ -819,6 +837,8 @@ export default function App() {
         setIsAIGenerating(false);
         setTimeout(() => setAiGenerationStatus(""), 5000);
       }
+    } else {
+      console.log("[doGenerateObjectiveTree] IA non configurée — résultat lexical conservé");
     }
   };
 
@@ -1072,7 +1092,7 @@ export default function App() {
           left: n.x,
           top: n.y,
           width: POSTIT_W,
-          height: exportMode ? "auto" : POSTIT_H,
+          height: "auto",
           zIndex: 3,
         }}
         onMouseDown={(e) => handleObjectiveMouseDown(e, n.id)}
@@ -1178,9 +1198,7 @@ export default function App() {
 
           {/* Texte principal */}
           <div
-            className={`font-extrabold text-[16px] break-words whitespace-pre-wrap pl-3 pr-6 ${
-              exportMode ? "" : "max-h-[44px] overflow-hidden"
-            }`}
+            className="font-extrabold text-[16px] break-words whitespace-pre-wrap pl-3 pr-6"
           >
             {n.content}
           </div>
