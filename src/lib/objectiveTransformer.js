@@ -1,19 +1,20 @@
 /**
- * objectiveTransformer.js — v3 (transformation sémantique expert)
+ * objectiveTransformer.js — v4 (transformation sémantique + antonymie)
  *
  * Architecture :
  *   1. analyzeProblemLabel()         — analyse sémantique du label source
  *   2. Utilitaires grammaticaux      — genre, nombre, accord, article
  *   3. Formateurs spécialisés        — un par structure sémantique
- *   4. formatObjectiveLabel()        — nettoyage final (supprime les "(e)")
- *   5. transformProblemLabelToObjectiveLabel() — fonction principale
- *   6. computeValidationScore()      — score automatique de confiance
- *   7. computeSemanticType()         — typage sémantique fin (means/intermediate/end)
- *   8. generateObjectiveTree()       — génération complète
- *   9. runSelfTests()                — suite de tests internes
+ *   4. formatObjectiveLabel()        — nettoyage final
+ *   5. ADJ_ANTONYMS                  — table adj négatif → adj positif
+ *   6. validateObjectiveLabel()      — rejet formulations mécaniques
+ *   7. transformProblemLabelToObjectiveLabel() — fonction principale (avec retry)
+ *   8. computeValidationScore()      — score automatique de confiance
+ *   9. computeSemanticType()         — typage sémantique fin
+ *  10. generateObjectiveTree()       — génération complète
+ *  11. runSelfTests()                — suite de tests internes
  *
  * Toutes les fonctions sont pures, sans effet de bord.
- * Préparées pour remplacement ultérieur par appel IA.
  */
 
 /* =========================================================
@@ -22,13 +23,14 @@
 
 /**
  * Analyse la structure sémantique d'un label problème.
- * Détecte le type de négation, l'objet principal et la structure de phrase.
  *
  * @param {string} label
  * @returns {{
  *   typeNegation: string|null,
  *   objetPrincipal: string,
  *   structure: string,
+ *   adjNégatif?: string,
+ *   antonymBase?: string,
  *   raw: string
  * }}
  */
@@ -94,7 +96,31 @@ export function analyzeProblemLabel(label) {
     }
   }
 
-  /* ── Patterns MILIEU / composés (ex: "Rôles non définis") ── */
+  /* ── Patterns MILIEU composés — "X trop adj" / "X peu adj" ── */
+  // Priorité sur les suffixes pour capturer la négation de degré
+  const tropMatch = t.match(/^(.+?)\s+trop\s+(.+)$/i);
+  if (tropMatch) {
+    return {
+      typeNegation: "trop_adj",
+      objetPrincipal: tropMatch[1].trim(),
+      adjNégatif: tropMatch[2].trim(),
+      structure: "X_trop_adj",
+      raw: t,
+    };
+  }
+
+  const peuAdjMatch = t.match(/^(.+?)\s+peu\s+(.+)$/i);
+  if (peuAdjMatch) {
+    return {
+      typeNegation: "peu_adj",
+      objetPrincipal: peuAdjMatch[1].trim(),
+      adjNégatif: peuAdjMatch[2].trim(),
+      structure: "X_peu_adj",
+      raw: t,
+    };
+  }
+
+  /* ── Patterns MILIEU / composés existants (ex: "Rôles non définis") ── */
   const midRules = [
     { re: /^(.+?)\s+non\s+défini[e]?s?$/i,        type: "non_defini",    structure: "X_non_defini",    group: 1 },
     { re: /^(.+?)\s+non\s+formalisé[e]?s?$/i,     type: "non_formalise", structure: "X_non_formalise", group: 1 },
@@ -116,7 +142,39 @@ export function analyzeProblemLabel(label) {
     }
   }
 
-  /* ── Patterns SUFFIXE (adjectif négatif en fin de phrase) ── */
+  /* ── Patterns SUFFIXE — adjectifs négatifs avec antonymie sémantique ── */
+  // Ces règles ont priorité sur les suffixes génériques qui suivent
+  const adjAntonymSuffixRules = [
+    { re: /^(.+?)\s+confus[e]?s?$/i,          antonymBase: "clarifié"    },
+    { re: /^(.+?)\s+complexes?$/i,              antonymBase: "simplifié"   },
+    { re: /^(.+?)\s+fréquente?s?$/i,            antonymBase: "optimisé"    },
+    { re: /^(.+?)\s+dégradé[e]?s?$/i,          antonymBase: "amélioré"    },
+    { re: /^(.+?)\s+obsolète[s]?$/i,            antonymBase: "modernisé"   },
+    { re: /^(.+?)\s+inadapté[e]?s?$/i,         antonymBase: "adapté"      },
+    { re: /^(.+?)\s+inadéquat[e]?s?$/i,        antonymBase: "adapté"      },
+    { re: /^(.+?)\s+inutile[s]?$/i,             antonymBase: "valorisé"    },
+    { re: /^(.+?)\s+inefficace[s]?$/i,          antonymBase: "optimisé"    },
+    { re: /^(.+?)\s+problématique[s]?$/i,       antonymBase: "résolu"      },
+    { re: /^(.+?)\s+défaillant[e]?s?$/i,       antonymBase: "renforcé"    },
+    { re: /^(.+?)\s+lent[e]?s?$/i,             antonymBase: "optimisé"    },
+    { re: /^(.+?)\s+lourd[e]?s?$/i,            antonymBase: "simplifié"   },
+    { re: /^(.+?)\s+rigide[s]?$/i,              antonymBase: "adapté"      },
+  ];
+
+  for (const { re, antonymBase } of adjAntonymSuffixRules) {
+    const m = t.match(re);
+    if (m) {
+      return {
+        typeNegation: "adj_negatif",
+        objetPrincipal: m[1].trim(),
+        antonymBase,
+        structure: "X_adj_antonym",
+        raw: t,
+      };
+    }
+  }
+
+  /* ── Patterns SUFFIXE génériques (adjectifs de manque/absence) ── */
   const suffixRules = [
     { re: /\s+irrégulières?$/i,     type: "irrégulier",   structure: "X_irregulier" },
     { re: /\s+insuffisant[e]?s?$/i, type: "faible",        structure: "X_faible" },
@@ -124,8 +182,6 @@ export function analyzeProblemLabel(label) {
     { re: /\s+limité[e]?s?$/i,      type: "faible",        structure: "X_faible" },
     { re: /\s+absent[e]?s?$/i,      type: "absence",       structure: "X_absent" },
     { re: /\s+inexistant[e]?s?$/i,  type: "absence",       structure: "X_absent" },
-    { re: /\s+défaillant[e]?s?$/i,  type: "faible",        structure: "X_faible" },
-    { re: /\s+inadéquat[e]?s?$/i,   type: "faible",        structure: "X_faible" },
     { re: /\s+discontinu[e]?s?$/i,  type: "irrégulier",    structure: "X_irregulier" },
     { re: /\s+ponctuel[s]?$/i,      type: "irrégulier",    structure: "X_irregulier" },
   ];
@@ -145,22 +201,16 @@ export function analyzeProblemLabel(label) {
    ÉTAPE 2 — UTILITAIRES GRAMMATICAUX
    ========================================================= */
 
-/**
- * Devine le genre grammatical français d'un nom (heuristique).
- * @returns {"f"|"m"}
- */
 function guessGender(noun) {
   const n = noun
     .toLowerCase()
     .trim()
-    .replace(/aux$/, "al")   // canaux → canal
-    .replace(/eaux$/, "eau") // bureaux → bureau
-    .replace(/[xs]$/, "");   // autres pluriels
+    .replace(/aux$/, "al")
+    .replace(/eaux$/, "eau")
+    .replace(/[xs]$/, "");
 
-  // Terminaisons féminines fiables
   if (/(ion|ité|ance|ence|esse|ure|ode|ise|tion|sion|ison|tude|ude|ière|ière|ée|eau)$/.test(n)) return "f";
 
-  // Mots féminins courants en gestion de projet / GAR
   const feminineWords = [
     "information", "communication", "coordination", "mobilisation", "participation",
     "formation", "ressource", "ressources", "confiance", "cohésion", "vision", "mission", "décision",
@@ -171,91 +221,78 @@ function guessGender(noun) {
     "capitalisation", "documentation", "évaluation", "représentation", "concertation",
     "cotisation", "solidarité", "responsabilité", "durabilité", "visibilité", "crédibilité",
     "disponibilité", "accessibilité", "qualité", "capacité", "activité", "volonté",
+    "interface", "plateforme", "application", "saisie", "procédure", "démarche",
   ];
   if (feminineWords.some((fw) => n.includes(fw))) return "f";
 
-  // Terminaisons masculines
   if (/(ment|age|eur|isme|oir|al|eau|et|eau|é|if|oud|our)$/.test(n)) return "m";
 
-  return "m"; // défaut masculin
+  return "m";
 }
 
-/** Renvoie true si le mot est au pluriel (heuristique). */
 function isPlural(noun) {
   const n = noun.trim().toLowerCase();
-  // Mots invariables courants (toujours terminés en -s/-x mais singuliers)
-  const invariable = ['voix', 'croix', 'bois', 'temps', 'corps', 'bras', 'dos', 'cas', 'pays',
-                      'choix', 'prix', 'flux', 'avis', 'poids', 'mois', 'cours', 'accès'];
+  const invariable = [
+    "voix", "croix", "bois", "temps", "corps", "bras", "dos", "cas", "pays",
+    "choix", "prix", "flux", "avis", "poids", "mois", "cours", "accès",
+    "parcours", "recours", "succès", "procès", "progrès", "palmarès",
+  ];
   if (invariable.includes(n)) return false;
-  // Mots en -aux → pluriel de -al (canaux, journaux, animaux…)
   if (/aux$/i.test(n)) return true;
-  // Terminaison en -s ou -x → pluriel probable (rôles, ressources, financières…)
   if (/[sx]$/i.test(n)) return true;
   return false;
 }
 
-/**
- * Extrait le nom tête (premier mot) d'un syntagme nominal.
- * Ex: "participation aux réunions" → "participation"
- *     "ressources financières"     → "ressources"
- *     "plan d'action"              → "plan"
- */
 function extractHeadNoun(phrase) {
   const words = phrase.trim().split(/\s+/);
   return words[0] || phrase;
 }
 
-/** Singularise simplement un mot français (heuristique). */
 function singularize(noun) {
   const n = noun.trim();
-  if (/tions$/i.test(n)) return n.replace(/s$/i, "");      // communications
-  if (/sions$/i.test(n)) return n.replace(/s$/i, "");      // décisions
-  if (/ences$/i.test(n)) return n.replace(/s$/i, "");      // compétences
-  if (/ances$/i.test(n)) return n.replace(/s$/i, "");      // ressources
-  if (/ités$/i.test(n)) return n.replace(/s$/i, "");       // capacités
+  if (/tions$/i.test(n)) return n.replace(/s$/i, "");
+  if (/sions$/i.test(n)) return n.replace(/s$/i, "");
+  if (/ences$/i.test(n)) return n.replace(/s$/i, "");
+  if (/ances$/i.test(n)) return n.replace(/s$/i, "");
   if (/ités$/i.test(n)) return n.replace(/s$/i, "");
-  if (/aux$/i.test(n)) return n.replace(/aux$/i, "al");    // canaux → canal
-  if (/eaux$/i.test(n)) return n.replace(/eaux$/i, "eau"); // bureaux → bureau
-  if (/s$/i.test(n)) return n.replace(/s$/, "");           // général
+  if (/aux$/i.test(n)) return n.replace(/aux$/i, "al");
+  if (/eaux$/i.test(n)) return n.replace(/eaux$/i, "eau");
+  if (/s$/i.test(n)) return n.replace(/s$/, "");
   return n;
 }
 
-/**
- * Table d'accords des participes passés les plus utilisés.
- * Forme : { m, f, mp, fp }
- */
 const ACCORD_TABLE = {
-  assuré:    { m: "assuré",    f: "assurée",    mp: "assurés",    fp: "assurées"    },
-  renforcé:  { m: "renforcé",  f: "renforcée",  mp: "renforcés",  fp: "renforcées"  },
-  stabilisé: { m: "stabilisé", f: "stabilisée", mp: "stabilisés", fp: "stabilisées" },
-  amélioré:  { m: "amélioré",  f: "améliorée",  mp: "améliorés",  fp: "améliorées"  },
-  préservé:  { m: "préservé",  f: "préservée",  mp: "préservés",  fp: "préservées"  },
-  défini:    { m: "défini",    f: "définie",    mp: "définis",    fp: "définies"    },
-  formalisé: { m: "formalisé", f: "formalisée", mp: "formalisés", fp: "formalisées" },
-  mobilisé:  { m: "mobilisé",  f: "mobilisée",  mp: "mobilisés",  fp: "mobilisées"  },
-  valorisé:  { m: "valorisé",  f: "valorisée",  mp: "valorisés",  fp: "valorisées"  },
-  adapté:    { m: "adapté",    f: "adaptée",    mp: "adaptés",    fp: "adaptées"    },
-  optimisé:  { m: "optimisé",  f: "optimisée",  mp: "optimisés",  fp: "optimisées"  },
-  intégré:   { m: "intégré",   f: "intégrée",   mp: "intégrés",   fp: "intégrées"   },
-  développé: { m: "développé", f: "développée", mp: "développés", fp: "développées" },
-  consolidé: { m: "consolidé", f: "consolidée", mp: "consolidés", fp: "consolidisées" },
-  facilité:  { m: "facilité",  f: "facilitée",  mp: "facilités",  fp: "facilitées"  },
-  maintenu:  { m: "maintenu",  f: "maintenue",  mp: "maintenus",  fp: "maintenues"  },
-  organisé:  { m: "organisé",  f: "organisée",  mp: "organisés",  fp: "organisées"  },
-  structuré: { m: "structuré", f: "structurée", mp: "structurés", fp: "structurées" },
+  assuré:      { m: "assuré",      f: "assurée",      mp: "assurés",      fp: "assurées"      },
+  renforcé:    { m: "renforcé",    f: "renforcée",    mp: "renforcés",    fp: "renforcées"    },
+  stabilisé:   { m: "stabilisé",   f: "stabilisée",   mp: "stabilisés",   fp: "stabilisées"   },
+  amélioré:    { m: "amélioré",    f: "améliorée",    mp: "améliorés",    fp: "améliorées"    },
+  préservé:    { m: "préservé",    f: "préservée",    mp: "préservés",    fp: "préservées"    },
+  défini:      { m: "défini",      f: "définie",      mp: "définis",      fp: "définies"      },
+  formalisé:   { m: "formalisé",   f: "formalisée",   mp: "formalisés",   fp: "formalisées"   },
+  mobilisé:    { m: "mobilisé",    f: "mobilisée",    mp: "mobilisés",    fp: "mobilisées"    },
+  valorisé:    { m: "valorisé",    f: "valorisée",    mp: "valorisés",    fp: "valorisées"    },
+  adapté:      { m: "adapté",      f: "adaptée",      mp: "adaptés",      fp: "adaptées"      },
+  optimisé:    { m: "optimisé",    f: "optimisée",    mp: "optimisés",    fp: "optimisées"    },
+  intégré:     { m: "intégré",     f: "intégrée",     mp: "intégrés",     fp: "intégrées"     },
+  développé:   { m: "développé",   f: "développée",   mp: "développés",   fp: "développées"   },
+  consolidé:   { m: "consolidé",   f: "consolidée",   mp: "consolidés",   fp: "consolidées"   },
+  facilité:    { m: "facilité",    f: "facilitée",    mp: "facilités",    fp: "facilitées"    },
+  maintenu:    { m: "maintenu",    f: "maintenue",    mp: "maintenus",    fp: "maintenues"    },
+  organisé:    { m: "organisé",    f: "organisée",    mp: "organisés",    fp: "organisées"    },
+  structuré:   { m: "structuré",   f: "structurée",   mp: "structurés",   fp: "structurées"   },
+  // Nouveaux (antonymie)
+  clarifié:    { m: "clarifié",    f: "clarifiée",    mp: "clarifiés",    fp: "clarifiées"    },
+  simplifié:   { m: "simplifié",   f: "simplifiée",   mp: "simplifiés",   fp: "simplifiées"   },
+  modernisé:   { m: "modernisé",   f: "modernisée",   mp: "modernisés",   fp: "modernisées"   },
+  rationalisé: { m: "rationalisé", f: "rationalisée", mp: "rationalisés", fp: "rationalisées" },
+  unifié:      { m: "unifié",      f: "unifiée",      mp: "unifiés",      fp: "unifiées"      },
+  résolu:      { m: "résolu",      f: "résolue",      mp: "résolus",      fp: "résolues"      },
+  numérisé:    { m: "numérisé",    f: "numérisée",    mp: "numérisés",    fp: "numérisées"    },
 };
 
-/**
- * Accorde un participe passé avec le nom donné.
- * @param {string} base   - Forme masculine singulier (ex: "assuré")
- * @param {string} noun   - Nom de référence
- * @returns {string} Forme accordée
- */
 function agree(base, noun) {
   const table = ACCORD_TABLE[base];
   if (!table) return base;
-  // Accord sur le nom tête (premier mot du syntagme) pour éviter l'attraction
-  // vers un complément : "participation aux réunions" → accord sur "participation"
   const head = extractHeadNoun(noun);
   const plural = isPlural(head);
   const gender = guessGender(head);
@@ -263,9 +300,6 @@ function agree(base, noun) {
   return gender === "f" ? table.f : table.m;
 }
 
-/**
- * Accorde "mis en place" avec le nom.
- */
 function misEnPlace(noun) {
   const head = extractHeadNoun(noun);
   const plural = isPlural(head);
@@ -276,11 +310,6 @@ function misEnPlace(noun) {
   return "mis en place";
 }
 
-/**
- * Construit "de + article + nom singulier" (élision/contraction).
- * Ex: "information" → "de l'information"
- *     "dispositif" → "du dispositif"
- */
 function deArticle(noun) {
   const singular = singularize(noun).toLowerCase().trim();
   if (/^[aeiouéèêëàâùûü]/i.test(singular)) return `de l'${singular}`;
@@ -289,63 +318,76 @@ function deArticle(noun) {
 }
 
 /* =========================================================
-   ÉTAPE 3 — FORMATEURS SÉMANTIQUES SPÉCIALISÉS
+   ÉTAPE 3 — TABLE ANTONYMS ADJECTIVAUX
+   (pour "X trop adj" → "X plus [antonym(adj)]")
+   ========================================================= */
+
+/**
+ * Adjectif négatif → adjectif positif (invariable ou déjà accordé).
+ * Quand "trop adj" est détecté, on cherche l'antonym et on produit
+ * "X plus [antonym]" — l'adj source est déjà accordé dans la phrase originale.
+ */
+const ADJ_ANTONYMS = {
+  "théorique": "pratique",       "théoriques": "pratiques",
+  "complexe":  "simple",         "complexes":  "simples",
+  "lent":      "rapide",         "lente":      "rapide",    "lents": "rapides",  "lentes": "rapides",
+  "long":      "concis",         "longue":     "concise",   "longs": "concis",   "longues": "concises",
+  "flou":      "clair",          "floue":      "claire",    "flous": "clairs",   "floues": "claires",
+  "rigide":    "flexible",       "rigides":    "flexibles",
+  "lourd":     "léger",          "lourde":     "légère",    "lourds": "légers",  "lourdes": "légères",
+  "difficile": "accessible",     "difficiles": "accessibles",
+  "coûteux":   "abordable",      "coûteuse":   "abordable",
+  "lourde":    "allégée",
+  "fragmenté": "unifié",         "fragmentée": "unifiée",   "fragmentés": "unifiés", "fragmentées": "unifiées",
+  "dispersé":  "centralisé",     "dispersée":  "centralisée",
+  "redondant": "rationalisé",    "redondante": "rationalisée",
+  "manuel":    "automatisé",     "manuelle":   "automatisée",
+  "opaque":    "transparent",    "opaques":    "transparents",
+  "inefficace": "efficace",      "inefficaces": "efficaces",
+  "inadapté":  "adapté",         "inadaptée":  "adaptée",
+};
+
+/* =========================================================
+   ÉTAPE 4 — FORMATEURS SÉMANTIQUES SPÉCIALISÉS
    ========================================================= */
 
 function formatManque(objet) {
-  // "manque de X" → "X assuré(e)"
   return `${cap(objet)} ${agree("assuré", objet)}`;
 }
 
 function formatAbsence(objet) {
-  // "absence de X" → "X mis(e) en place"
   return `${cap(objet)} ${misEnPlace(objet)}`;
 }
 
 function formatFaible(objet) {
-  // "faible X" → "X renforcé(e)"
   return `${cap(objet)} ${agree("renforcé", objet)}`;
 }
 
 function formatBaisse(objet) {
-  // "baisse de X" → "X stabilisé(e) et renforcé(e)"
-  const s1 = agree("stabilisé", objet);
-  const s2 = agree("renforcé", objet);
-  return `${cap(objet)} ${s1} et ${s2}`;
+  return `${cap(objet)} ${agree("stabilisé", objet)} et ${agree("renforcé", objet)}`;
 }
 
 function formatPerte(objet) {
-  // "perte de X" → "X préservé(e) et renforcé(e)"
-  const s1 = agree("préservé", objet);
-  const s2 = agree("renforcé", objet);
-  return `${cap(objet)} ${s1} et ${s2}`;
+  return `${cap(objet)} ${agree("préservé", objet)} et ${agree("renforcé", objet)}`;
 }
 
 function formatIrregulier(objet) {
-  // "X irrégulier/ières" → "Diffusion régulière de X assurée"
-  // On nominalise l'objet via "de + article + singulier"
   const article = deArticle(objet);
   return `Diffusion régulière ${article} assurée`;
 }
 
 function formatNonDefini(objet) {
-  // "X non défini(s)" → "X clairement défini(s)"
-  // Si "rôle", "fonction", "tâche", "mission" → ajoute "et responsabilités"
   const hasRole = /rôle|fonction|tâche|mission|attribut|poste/i.test(objet);
   const adj = agree("défini", objet);
-  if (hasRole) {
-    return `${cap(objet)} et responsabilités clairement ${adj}`;
-  }
+  if (hasRole) return `${cap(objet)} et responsabilités clairement ${adj}`;
   return `${cap(objet)} clairement ${adj}`;
 }
 
 function formatNonFormalise(objet) {
-  // "X non formalisé(s)" → "X formalisé(s)"
   return `${cap(objet)} ${agree("formalisé", objet)}`;
 }
 
 function formatDifficulteA(objet) {
-  // "difficulté à X" → "Capacité à X renforcée"
   return `Capacité à ${objet} renforcée`;
 }
 
@@ -362,17 +404,14 @@ function formatDesorganisation(objet) {
 }
 
 function formatMeconnaissance(objet) {
-  // "méconnaissance de X" → "Connaissance de X renforcée"
   return `Connaissance ${deArticle(objet)} renforcée`;
 }
 
 function formatNonX(objet) {
-  // "non X" générique → "X assuré(e)"
   return `${cap(objet)} ${agree("assuré", objet)}`;
 }
 
 function formatXFaible(objet) {
-  // adjectif négatif suffixe faiblesse
   return `${cap(objet)} ${agree("renforcé", objet)}`;
 }
 
@@ -380,32 +419,52 @@ function formatXAbsent(objet) {
   return `${cap(objet)} ${agree("assuré", objet)} et disponible`;
 }
 
-/* =========================================================
-   ÉTAPE 4 — FORMATEUR FINAL (nettoyage)
-   ========================================================= */
+/**
+ * "X adj_antonym" — remplace l'adjectif négatif par son antonyme (participe).
+ * Ex : "Parcours utilisateur confus" → antonymBase="clarifié" → "Parcours utilisateur clarifié"
+ */
+function formatAdjAntonym(objet, antonymBase) {
+  return `${cap(objet)} ${agree(antonymBase, objet)}`;
+}
 
 /**
- * Nettoie et standardise le label objectif final.
- * — Supprime les marqueurs "(e)" résiduels
- * — Capitalise la première lettre
- * — Normalise les espaces
- *
- * @param {string} text
- * @returns {string}
+ * "X trop adj" → "X plus [antonym(adj)]"
+ * Ex : "Formation trop théorique" → "Formation plus pratique"
+ * Si pas d'antonymie connue → fallback "X optimisé(e)"
  */
+function formatTropAdj(objet, adj) {
+  const adjLower = adj.toLowerCase().trim();
+  const antonym = ADJ_ANTONYMS[adjLower];
+  if (antonym) return `${cap(objet)} plus ${antonym}`;
+  // Fallback : suppression de l'adjectif + participe générique
+  return `${cap(objet)} ${agree("optimisé", objet)}`;
+}
+
+/**
+ * "X peu adj" → "X plus adj"
+ * Ex : "Interface peu intuitive" → "Interface plus intuitive"
+ */
+function formatPeuAdj(objet, adj) {
+  return `${cap(objet)} plus ${adj.toLowerCase().trim()}`;
+}
+
+/* =========================================================
+   ÉTAPE 5 — FORMATEUR FINAL (nettoyage)
+   ========================================================= */
+
 export function formatObjectiveLabel(text) {
   if (!text) return text ?? "";
   return text
-    .replace(/\(e\)s\b/g, "s")   // "(e)s" → "s"
-    .replace(/\(e\)\b/g, "")     // "(e)" → ""
-    .replace(/\(s\)\b/g, "s")    // "(s)" → "s"
+    .replace(/\(e\)s\b/g, "s")
+    .replace(/\(e\)\b/g, "")
+    .replace(/\(s\)\b/g, "s")
     .replace(/\s{2,}/g, " ")
     .trim()
     .replace(/^./, (c) => c.toUpperCase());
 }
 
 /* =========================================================
-   ÉTAPE 5 — MARQUEURS POSITIFS (labels à conserver tels quels)
+   ÉTAPE 6 — MARQUEURS POSITIFS (labels à conserver)
    ========================================================= */
 
 const POSITIVE_MARKERS = [
@@ -434,135 +493,67 @@ const POSITIVE_MARKERS = [
   "établi", "établie",
   "valorisé", "valorisée",
   "maintenu", "maintenue",
+  "clarifié", "clarifiée", "clarifiés", "clarifiées",
+  "simplifié", "simplifiée", "simplifiés", "simplifiées",
+  "modernisé", "modernisée",
+  "résolu", "résolue", "résolus", "résolues",
+  "rationalisé", "rationalisée",
+  "unifié", "unifiée",
 ];
 
-/**
- * Renvoie true si le label semble déjà formulé positivement.
- * Vérifie qu'il ne commence pas par une négation avant d'approuver.
- */
 function soundsPositive(label) {
   if (!label) return false;
-  // Si commence par un mot négatif → pas positif
   if (/^(?:manque|absence|faible|insuffisant|mauvais|baisse|non|pas|peu|aucun|déficit|perte|dégradation|problème|difficulté|inexistence|inefficacité|désorganisation)/i.test(label.trim())) return false;
-  // Si contient "non " → pas positif
   if (/\bnon\s+/i.test(label)) return false;
-  // Contient un marqueur positif ?
+  if (/\btrop\s+/i.test(label)) return false;
+  if (/\bpeu\s+/i.test(label)) return false;
   const lower = label.toLowerCase();
-  return POSITIVE_MARKERS.some((m) => lower.includes(m));
+  // Séparer les marqueurs multi-mots (ex: "mis en place") des mots simples
+  const multiWord  = POSITIVE_MARKERS.filter((m) => m.includes(" "));
+  const singleWord = new Set(POSITIVE_MARKERS.filter((m) => !m.includes(" ")));
+  // Marqueurs multi-mots : recherche en sous-chaîne (peu de faux positifs)
+  if (multiWord.some((m) => lower.includes(m))) return true;
+  // Marqueurs simples : mot entier uniquement (évite "irrégulières" ⊃ "régulières")
+  const words = lower.split(/[\s''`-]+/);
+  return words.some((w) => singleWord.has(w));
 }
 
 /* =========================================================
-   ÉTAPE 6 — TRANSFORMATION PRINCIPALE
+   ÉTAPE 7 — VALIDATEUR ANTI-FORMULATIONS MÉCANIQUES
    ========================================================= */
 
 /**
- * Transforme une étiquette négative en objectif positif opérationnel.
- * Approche sémantique : analyse d'abord, formule ensuite.
- *
- * @param {string} label    - Étiquette source (arbre à problèmes)
- * @param {"problem"|"causes"|"consequences"} nodeType
- * @returns {string}        - Étiquette objectif
+ * Liste des mots négatifs interdits dans un objectif transformé.
+ * Si l'un de ces mots est présent dans le résultat, la transformation est rejetée.
  */
-export function transformProblemLabelToObjectiveLabel(label, nodeType) {
-  if (!label?.trim()) return label ?? "";
-  const t = label.trim();
+const NEGATIVE_WORDS_FORBIDDEN = [
+  "trop", "peu",
+  "confus", "confuse", "confuses",
+  "complexe", "complexes",
+  "insuffisant", "insuffisante", "insuffisants", "insuffisantes",
+  "absent", "absente", "absents", "absentes",
+  "fréquent", "fréquente", "fréquents", "fréquentes",
+  "faible", "faibles",
+  "réduit", "réduite", "réduits", "réduites",
+  "dégradé", "dégradée", "dégradés", "dégradées",
+  "moins",
+  "inutile", "inutiles",
+  "problématique", "problématiques",
+  "défaillant", "défaillante",
+  "théorique", "théoriques",
+  "inadéquat", "inadéquate",
+  "obsolète",
+  "inadapté", "inadaptée",
+  "inefficace", "inefficaces",
+  "lent", "lente", "lents", "lentes",
+  "lourd", "lourde", "lourds", "lourdes",
+  "rigide", "rigides",
+  "fragmenté", "fragmentée",
+  "dispersé", "dispersée",
+  "opaque", "opaques",
+];
 
-  const { typeNegation, objetPrincipal, structure } = analyzeProblemLabel(t);
-
-  let result;
-
-  switch (structure) {
-    // ── Structures avec "de/des + X" ─────────────────────────────────────────
-    case "manque_de_X":
-    case "insuffisance_de_X":
-      result = formatManque(objetPrincipal);
-      break;
-
-    case "absence_de_X":
-      result = formatAbsence(objetPrincipal);
-      break;
-
-    case "faible_X":
-      result = formatFaible(objetPrincipal);
-      break;
-
-    case "baisse_de_X":
-      result = formatBaisse(objetPrincipal);
-      break;
-
-    case "perte_de_X":
-      result = formatPerte(objetPrincipal);
-      break;
-
-    // ── Structures suffixes / milieu ──────────────────────────────────────────
-    case "X_irregulier":
-      result = formatIrregulier(objetPrincipal);
-      break;
-
-    case "X_non_defini":
-      result = formatNonDefini(objetPrincipal);
-      break;
-
-    case "X_non_formalise":
-      result = formatNonFormalise(objetPrincipal);
-      break;
-
-    case "X_faible":
-      result = formatXFaible(objetPrincipal);
-      break;
-
-    case "X_absent":
-      result = formatXAbsent(objetPrincipal);
-      break;
-
-    // ── Cas spéciaux ──────────────────────────────────────────────────────────
-    case "difficulte_a_X":
-      result = formatDifficulteA(objetPrincipal);
-      break;
-
-    case "isolement_de_X":
-      result = formatIsolement(objetPrincipal);
-      break;
-
-    case "exclusion_de_X":
-      result = formatExclusion(objetPrincipal);
-      break;
-
-    case "desorganisation_de_X":
-      result = formatDesorganisation(objetPrincipal);
-      break;
-
-    case "meconnaissance_de_X":
-      result = formatMeconnaissance(objetPrincipal);
-      break;
-
-    case "desinformation":
-      result = "Information fiable diffusée";
-      break;
-
-    case "non_X":
-      result = formatNonX(objetPrincipal);
-      break;
-
-    // ── Neutre : label peut-être déjà positif, ou non reconnu ────────────────
-    case "neutral":
-    default:
-      if (soundsPositive(t)) return t;
-      // Repli selon le type de nœud
-      if (nodeType === "causes")       result = formatFaible(t);
-      else if (nodeType === "consequences") result = `${cap(t)} ${agree("amélioré", t)}`;
-      else result = `${cap(t)} ${agree("assuré", t)}`;
-      break;
-  }
-
-  return formatObjectiveLabel(result);
-}
-
-/* =========================================================
-   ÉTAPE 7 — SCORE DE VALIDATION AUTOMATIQUE
-   ========================================================= */
-
-/** Formulations interdites (vides de sens ou mécaniques). */
+/** Formulations interdites (patterns) */
 const FORBIDDEN_PATTERNS = [
   /résoudre le problème/i,
   /améliorer la situation de/i,
@@ -571,35 +562,185 @@ const FORBIDDEN_PATTERNS = [
   /mettre fin [àa]/i,
   /problème traité/i,
   /cause résolue/i,
-  /\(e\)/,        // marqueurs genre non résolus
+  /\(e\)/,
 ];
+
+/**
+ * Valide qu'un objectif transformé ne contient pas de mots négatifs
+ * ni de formulations mécaniques.
+ *
+ * @param {string} sourceLabel
+ * @param {string} targetLabel
+ * @returns {{ valid: boolean, reason?: string }}
+ */
+export function validateObjectiveLabel(sourceLabel, targetLabel) {
+  if (!targetLabel?.trim()) return { valid: false, reason: "empty" };
+
+  if (FORBIDDEN_PATTERNS.some((p) => p.test(targetLabel))) {
+    return { valid: false, reason: "forbidden_pattern" };
+  }
+
+  const lower = targetLabel.toLowerCase();
+  for (const word of NEGATIVE_WORDS_FORBIDDEN) {
+    const wordRe = new RegExp(`\\b${word}\\b`, "i");
+    if (wordRe.test(lower)) {
+      return { valid: false, reason: `contains_negative: ${word}` };
+    }
+  }
+
+  if (targetLabel.trim().toLowerCase() === sourceLabel.trim().toLowerCase()) {
+    return { valid: false, reason: "unchanged" };
+  }
+
+  return { valid: true };
+}
+
+/* =========================================================
+   ÉTAPE 8 — TRANSFORMATION PRINCIPALE
+   ========================================================= */
+
+/**
+ * Applique la règle de transformation selon la structure détectée.
+ * Fonction interne — appelée par transformProblemLabelToObjectiveLabel.
+ */
+function _applyRule(t, analysis, nodeType) {
+  const { typeNegation, objetPrincipal, structure, adjNégatif, antonymBase } = analysis;
+
+  switch (structure) {
+    case "manque_de_X":
+    case "insuffisance_de_X":
+      return formatManque(objetPrincipal);
+
+    case "absence_de_X":
+      return formatAbsence(objetPrincipal);
+
+    case "faible_X":
+      return formatFaible(objetPrincipal);
+
+    case "baisse_de_X":
+      return formatBaisse(objetPrincipal);
+
+    case "perte_de_X":
+      return formatPerte(objetPrincipal);
+
+    case "X_irregulier":
+      return formatIrregulier(objetPrincipal);
+
+    case "X_non_defini":
+      return formatNonDefini(objetPrincipal);
+
+    case "X_non_formalise":
+      return formatNonFormalise(objetPrincipal);
+
+    case "X_faible":
+      return formatXFaible(objetPrincipal);
+
+    case "X_absent":
+      return formatXAbsent(objetPrincipal);
+
+    case "difficulte_a_X":
+      return formatDifficulteA(objetPrincipal);
+
+    case "isolement_de_X":
+      return formatIsolement(objetPrincipal);
+
+    case "exclusion_de_X":
+      return formatExclusion(objetPrincipal);
+
+    case "desorganisation_de_X":
+      return formatDesorganisation(objetPrincipal);
+
+    case "meconnaissance_de_X":
+      return formatMeconnaissance(objetPrincipal);
+
+    case "desinformation":
+      return "Information fiable diffusée";
+
+    case "non_X":
+      return formatNonX(objetPrincipal);
+
+    // ── Nouveaux cas sémantiques ──────────────────────────────────────────────
+    case "X_adj_antonym":
+      return formatAdjAntonym(objetPrincipal, antonymBase);
+
+    case "X_trop_adj":
+      return formatTropAdj(objetPrincipal, adjNégatif);
+
+    case "X_peu_adj":
+      return formatPeuAdj(objetPrincipal, adjNégatif);
+
+    // ── Neutre : label peut-être déjà positif, ou non reconnu ────────────────
+    case "neutral":
+    default:
+      if (soundsPositive(t)) return t;
+      // Repli prudent : utiliser le nom tête + participe selon nodeType
+      if (nodeType === "causes")        return formatFaible(objetPrincipal);
+      if (nodeType === "consequences")  return `${cap(objetPrincipal)} ${agree("amélioré", objetPrincipal)}`;
+      return `${cap(objetPrincipal)} ${agree("assuré", objetPrincipal)}`;
+  }
+}
+
+/**
+ * Transforme une étiquette négative en objectif positif opérationnel.
+ * Inclut un mécanisme de retry si la validation échoue.
+ *
+ * @param {string} label
+ * @param {"problem"|"causes"|"consequences"} nodeType
+ * @returns {string}
+ */
+export function transformProblemLabelToObjectiveLabel(label, nodeType) {
+  if (!label?.trim()) return label ?? "";
+  const t = label.trim();
+
+  // Court-circuit : label déjà formulé positivement → conserver tel quel
+  if (soundsPositive(t)) return t;
+
+  const analysis = analyzeProblemLabel(t);
+
+  // Tentative principale
+  let result = formatObjectiveLabel(_applyRule(t, analysis, nodeType));
+
+  // Si la validation échoue, tentative de repli sémantique
+  if (!validateObjectiveLabel(t, result).valid) {
+    const objet = analysis.objetPrincipal || t;
+    const fallback =
+      nodeType === "causes"       ? formatFaible(objet) :
+      nodeType === "consequences" ? `${cap(objet)} ${agree("amélioré", objet)}` :
+                                    formatManque(objet);
+    const fallbackFormatted = formatObjectiveLabel(fallback);
+    // On accepte le repli même imparfait (sera marqué to_review)
+    if (fallbackFormatted !== result) result = fallbackFormatted;
+  }
+
+  return result;
+}
+
+/* =========================================================
+   ÉTAPE 9 — SCORE DE VALIDATION AUTOMATIQUE
+   ========================================================= */
 
 /**
  * Calcule un score de confiance (0–3) pour la transformation.
  * score < 2 → statut "to_review"
- *
- * @param {string} sourceLabel
- * @param {{ typeNegation: string|null, structure: string }} analysis
- * @param {string} transformedLabel
- * @returns {number}
  */
 function computeValidationScore(sourceLabel, analysis, transformedLabel) {
   let score = 0;
 
-  // +1 : aucune formulation interdite
-  if (!FORBIDDEN_PATTERNS.some((p) => p.test(transformedLabel))) score += 1;
+  // +1 : passe le validateur anti-mécanique
+  const v = validateObjectiveLabel(sourceLabel, transformedLabel);
+  if (v.valid) score += 1;
 
   // +1 : une transformation reconnue a été appliquée (pas de repli neutre)
   if (analysis.typeNegation !== null && analysis.structure !== "neutral") score += 1;
 
-  // +1 : le label transformé est différent du source (quelque chose a bien changé)
+  // +1 : le label transformé est différent du source
   if (transformedLabel.trim().toLowerCase() !== sourceLabel.trim().toLowerCase()) score += 1;
 
   return score;
 }
 
 /* =========================================================
-   ÉTAPE 8 — TYPAGE SÉMANTIQUE FIN
+   ÉTAPE 10 — TYPAGE SÉMANTIQUE FIN
    ========================================================= */
 
 function categoryToObjectiveType(category) {
@@ -616,19 +757,10 @@ function objectiveTypeToColor(objectiveType) {
   return "teal";
 }
 
-/**
- * Détermine le type sémantique fin d'un nœud cause :
- * - "intermediate" : directement relié au problème central
- * - "means"        : relié à une cause intermédiaire (racine profonde)
- * - "end"          : conséquence / finalité
- *
- * @returns {"means"|"intermediate"|"end"}
- */
 function computeSemanticType(postIt, problemPostIts, problemConns) {
-  if (postIt.category === "problem")      return "end";  // l'objectif central est une fin
+  if (postIt.category === "problem")      return "end";
   if (postIt.category === "consequences") return "end";
 
-  // Pour les causes : chercher si directement connecté au problème central
   const centralProblem = problemPostIts.find(
     (p) => p.category === "problem" && p.isInTree
   );
@@ -644,17 +776,9 @@ function computeSemanticType(postIt, problemPostIts, problemConns) {
 }
 
 /* =========================================================
-   ÉTAPE 9 — GÉNÉRATION COMPLÈTE DE L'ARBRE À OBJECTIFS
+   ÉTAPE 11 — GÉNÉRATION COMPLÈTE DE L'ARBRE À OBJECTIFS
    ========================================================= */
 
-/**
- * Génère l'arbre à objectifs depuis l'arbre à problèmes.
- * Conserve la traçabilité complète + ajoute score et type sémantique.
- *
- * @param {Array} problemPostIts
- * @param {Array} problemConns
- * @returns {{ nodes: Array, connections: Array }}
- */
 export function generateObjectiveTree(problemPostIts, problemConns) {
   const inTree = problemPostIts.filter((p) => p.isInTree);
   const inTreeIds = new Set(inTree.map((p) => p.id));
@@ -668,27 +792,22 @@ export function generateObjectiveTree(problemPostIts, problemConns) {
 
     return {
       id: `obj-${p.id}`,
-      // ── Traçabilité (obligatoire) ─────────────────────────────────────
       sourceProblemNodeId: p.id,
       sourceLabel: p.content,
       sourceType: p.category === "problem" ? "problem" : p.category === "causes" ? "cause" : "consequence",
-      // ── Contenu ───────────────────────────────────────────────────────
-      content: transformedLabel,      // compatibilité champ "content" existant
-      objectiveType,                  // "central" | "means" | "ends"
-      semanticType,                   // "means" | "intermediate" | "end"
-      // ── Positionnement ────────────────────────────────────────────────
+      content: transformedLabel,
+      objectiveType,
+      semanticType,
       x: p.x,
       y: p.y,
       isInTree: true,
       color: objectiveTypeToColor(objectiveType),
-      // ── Validation ────────────────────────────────────────────────────
       validation: {
         desirable: null,
         feasible: null,
         logical: null,
-        // Score < 2 → marquer automatiquement "à revoir"
         status: score < 2 ? "to_review" : "generated",
-        _score: score,  // utile pour debug / future IA
+        _score: score,
       },
     };
   });
@@ -705,72 +824,31 @@ export function generateObjectiveTree(problemPostIts, problemConns) {
 }
 
 /* =========================================================
-   ÉTAPE 10 — SUITE DE TESTS INTERNES
+   ÉTAPE 12 — SUITE DE TESTS INTERNES
    ========================================================= */
 
-/**
- * Exécute les tests de régression internes.
- * Utilisable en dev : `import { runSelfTests } from './lib/objectiveTransformer'`
- *
- * @returns {{ input: string, output: string, expected: string, pass: boolean }[]}
- */
 export function runSelfTests() {
   const TESTS = [
-    // ── Tests de base (exigences consignes) ───────────────────────────────
-    {
-      input: "Manque de communication interne", type: "causes",
-      expected: "Communication interne assurée",
-    },
-    {
-      input: "Informations irrégulières", type: "causes",
-      expected: "Diffusion régulière de l'information assurée",
-    },
-    {
-      input: "Rôles non définis", type: "causes",
-      expected: "Rôles et responsabilités clairement définis",
-    },
-    {
-      input: "Faible mobilisation", type: "causes",
-      expected: "Mobilisation renforcée",
-    },
-    {
-      input: "Baisse des cotisations", type: "consequences",
-      expected: "Cotisations stabilisées et renforcées",
-    },
-    // ── Tests suffixes ────────────────────────────────────────────────────
-    {
-      input: "Absence de plan d'action", type: "causes",
-      expected: "Plan d'action mis en place",
-    },
-    {
-      input: "Canaux non formalisés", type: "causes",
-      expected: "Canaux formalisés",
-    },
-    {
-      input: "Faible participation aux réunions", type: "causes",
-      expected: "Participation aux réunions renforcée",
-    },
-    {
-      input: "Manque de ressources financières", type: "causes",
-      expected: "Ressources financières assurées",
-    },
-    {
-      input: "Perte de confiance dans l'association", type: "consequences",
-      expected: "Confiance dans l'association préservée et renforcée",
-    },
-    {
-      input: "Faible visibilité de l'association", type: "consequences",
-      expected: "Visibilité de l'association renforcée",
-    },
-    // ── Tests labels déjà positifs (ne pas transformer) ───────────────────
-    {
-      input: "Communication renforcée", type: "causes",
-      expected: "Communication renforcée",
-    },
-    {
-      input: "Dispositif de suivi mis en place", type: "causes",
-      expected: "Dispositif de suivi mis en place",
-    },
+    // ── Tests de base ──────────────────────────────────────────────────────────
+    { input: "Manque de communication interne",       type: "causes",       expected: "Communication interne assurée" },
+    { input: "Informations irrégulières",              type: "causes",       expected: "Diffusion régulière de l'information assurée" },
+    { input: "Rôles non définis",                      type: "causes",       expected: "Rôles et responsabilités clairement définis" },
+    { input: "Faible mobilisation",                    type: "causes",       expected: "Mobilisation renforcée" },
+    { input: "Baisse des cotisations",                 type: "consequences", expected: "Cotisations stabilisées et renforcées" },
+    { input: "Absence de plan d'action",               type: "causes",       expected: "Plan d'action mis en place" },
+    { input: "Canaux non formalisés",                  type: "causes",       expected: "Canaux formalisés" },
+    { input: "Faible participation aux réunions",      type: "causes",       expected: "Participation aux réunions renforcée" },
+    { input: "Manque de ressources financières",       type: "causes",       expected: "Ressources financières assurées" },
+    { input: "Perte de confiance dans l'association",  type: "consequences", expected: "Confiance dans l'association préservée et renforcée" },
+    { input: "Faible visibilité de l'association",     type: "consequences", expected: "Visibilité de l'association renforcée" },
+    // ── Labels déjà positifs ──────────────────────────────────────────────────
+    { input: "Communication renforcée",                type: "causes",       expected: "Communication renforcée" },
+    { input: "Dispositif de suivi mis en place",       type: "causes",       expected: "Dispositif de suivi mis en place" },
+    // ── Nouveaux cas sémantiques (antonymie) ─────────────────────────────────
+    { input: "Formation trop théorique",               type: "causes",       expected: "Formation plus pratique" },
+    { input: "Parcours utilisateur confus",            type: "causes",       expected: "Parcours utilisateur clarifié" },
+    { input: "Processus trop complexe",                type: "causes",       expected: "Processus plus simple" },
+    { input: "Interface peu intuitive",                type: "causes",       expected: "Interface plus intuitive" },
   ];
 
   return TESTS.map((t) => {
@@ -784,7 +862,7 @@ export function runSelfTests() {
   });
 }
 
-/** Alias interne (utilisé par App.jsx via import) */
+/** Alias interne */
 function cap(str) {
   if (!str) return str ?? "";
   return str.charAt(0).toUpperCase() + str.slice(1);
