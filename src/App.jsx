@@ -913,11 +913,9 @@ export default function App() {
     setShowStrategies(true);
   };
 
-  /**
-   * Point d'entrée du bouton Objectifs / Régénérer.
-   * Si un arbre existe déjà, demande confirmation avant d'écraser.
-   */
+  /** Point d'entrée du bouton Objectifs. Ouvre le debug ; confirme si un arbre existe déjà. */
   const handleGenerateObjectiveTree = () => {
+    setDebugAI(true);
     if (objectiveNodes.length > 0) {
       setShowRegenConfirm(true);
     } else {
@@ -2195,7 +2193,7 @@ export default function App() {
           ) : (
             <>
               <button className="px-2 py-0.5 rounded bg-violet-600 text-white text-xs font-semibold" onClick={autoLayoutObjectives} title="Centrer et organiser les objectifs">Centrer</button>
-              <button className="px-2 py-0.5 rounded bg-green-700 text-white text-xs font-semibold" onClick={handleGenerateObjectiveTree} title="Régénérer depuis l’arbre à problèmes">Régénérer</button>
+              <button className="px-2 py-0.5 rounded bg-green-700 text-white text-xs font-semibold" onClick={handleGenerateObjectiveTree} title="Générer / régénérer depuis l’arbre à problèmes">Objectifs</button>
               <div className="w-px h-5 bg-slate-300 mx-1" />
               {/* Bouton détection stratégies */}
               <button
@@ -2281,7 +2279,7 @@ export default function App() {
                     <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 select-none">
                       <div className="text-5xl mb-4">🎯</div>
                       <div className="font-bold text-lg">Aucun objectif généré</div>
-                      <div className="text-sm mt-1">Cliquez sur « Régénérer » pour transformer l’arbre à problèmes</div>
+                      <div className="text-sm mt-1">Cliquez sur « Objectifs » pour transformer l’arbre à problèmes</div>
                     </div>
                   ) : (
                     <>
@@ -2450,7 +2448,7 @@ export default function App() {
         ) : (
           <>
             <button className="px-2 py-0.5 rounded bg-violet-600 text-white font-semibold" onClick={autoLayoutObjectives}>Centrer</button>
-            <button className="px-2 py-0.5 rounded bg-green-700 text-white font-semibold" onClick={handleGenerateObjectiveTree}>Régénérer</button>
+            <button className="px-2 py-0.5 rounded bg-green-700 text-white font-semibold" onClick={handleGenerateObjectiveTree}>Objectifs</button>
             <button
               className="px-2 py-0.5 rounded bg-violet-700 text-white font-semibold text-xs"
               onClick={handleDetectStrategies}
@@ -2770,7 +2768,7 @@ export default function App() {
               </button>
             )}
 
-            {/* Bouton Générer (mode problèmes, aucun arbre) ou Régénérer (mode objectifs) */}
+            {/* Bouton Objectifs — génère ou régénère l'arbre à objectifs */}
             {(treeMode === "objectives" || objectiveNodes.length === 0) && (
               <button
                 type="button"
@@ -2786,15 +2784,11 @@ export default function App() {
                 title={
                   isAIGenerating
                     ? "Génération IA en cours…"
-                    : treeMode === "objectives"
-                      ? "Régénérer l'arbre à objectifs (remplacera les modifications)"
-                      : "Générer l'arbre à objectifs"
+                    : "Générer / régénérer l'arbre à objectifs"
                 }
               >
-                {treeMode === "objectives"
-                  ? <RefreshCw className="w-3.5 h-3.5" />
-                  : <Target className="w-3.5 h-3.5" />}
-                <span>{treeMode === "objectives" ? "Régénérer" : "Objectifs"}</span>
+                <Target className="w-3.5 h-3.5" />
+                <span>Objectifs</span>
               </button>
             )}
 
@@ -3130,9 +3124,9 @@ export default function App() {
       {showRegenConfirm && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
           <div className="bg-white rounded-xl shadow-xl w-[440px] p-5">
-            <div className="font-bold text-base mb-2 text-amber-700">⚠ Régénérer l'arbre à objectifs ?</div>
+            <div className="font-bold text-base mb-2 text-amber-700">⚠ Générer un nouvel arbre à objectifs ?</div>
             <p className="text-sm text-slate-600 mb-4">
-              Un arbre à objectifs existe déjà. Régénérer <strong>remplacera définitivement</strong> toutes vos
+              Un arbre à objectifs existe déjà. Le regénérer <strong>remplacera définitivement</strong> toutes vos
               modifications, validations et réorganisations actuelles.
             </p>
             <div className="flex items-center justify-end gap-3">
@@ -3147,7 +3141,7 @@ export default function App() {
                 onClick={doGenerateObjectiveTree}
                 disabled={isAIGenerating}
               >
-                Régénérer quand même
+                Oui, régénérer
               </button>
             </div>
           </div>
