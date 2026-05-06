@@ -853,11 +853,13 @@ export default function App() {
         }
       } catch (err) {
         console.warn("[IA] Transformation échouée :", err.message);
-        setAiGenerationStatus(`IA indisponible : ${err.message.slice(0, 80)}`);
+        setAiGenerationStatus(`⚠ IA non disponible — fallback lexical utilisé : ${err.message.slice(0, 100)}`);
       } finally {
         setIsAIGenerating(false);
         setAiDebugLog(debugEntries);
-        setTimeout(() => setAiGenerationStatus(""), 5000);
+        // Auto-clear uniquement en cas de succès (pas d'erreur dans le log)
+        const hasError = debugEntries.some((e) => e.type === "http_error" || e.type === "error" || e.type === "batch_error");
+        if (!hasError) setTimeout(() => setAiGenerationStatus(""), 5000);
       }
     } else {
       // Pas d'IA : enregistrer quand même les décisions lexicales pour le debug

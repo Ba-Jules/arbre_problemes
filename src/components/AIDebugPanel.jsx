@@ -11,13 +11,18 @@ export default function AIDebugPanel({ log, onClose }) {
   const [tab, setTab] = useState("nodes");
   const [expandPayload, setExpandPayload] = useState(false);
 
-  const payloadEntries = log.filter((e) => e.type === "payload");
-  const rawEntries     = log.filter((e) => e.type === "raw");
-  const parsedEntries  = log.filter((e) => e.type === "parsed");
-  const errorEntries   = log.filter((e) => e.type === "error" || e.type === "batch_error");
-  const decisions      = log.find((e) => e.type === "node_decisions")?.decisions || [];
+  const payloadEntries  = log.filter((e) => e.type === "payload");
+  const rawEntries      = log.filter((e) => e.type === "raw");
+  const parsedEntries   = log.filter((e) => e.type === "parsed");
+  const httpErrors      = log.filter((e) => e.type === "http_error");
+  const httpRequests    = log.filter((e) => e.type === "http_request");
+  const httpOk          = log.filter((e) => e.type === "http_ok");
+  const errorEntries    = log.filter((e) => e.type === "error" || e.type === "batch_error");
+  const decisions       = log.find((e) => e.type === "node_decisions")?.decisions || [];
 
-  const hasAI = payloadEntries.length > 0;
+  const hasAI     = payloadEntries.length > 0;
+  const hasErrors = httpErrors.length > 0 || errorEntries.length > 0;
+  const hasSuccess = httpOk.length > 0;
 
   return (
     <div
@@ -37,19 +42,44 @@ export default function AIDebugPanel({ log, onClose }) {
         boxShadow: "0 -4px 24px rgba(0,0,0,0.5)",
       }}
     >
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", background: "#1e293b", borderBottom: "1px solid #334155", flexShrink: 0 }}>
+      {/* ── Header ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", background: "#1e293b", borderBottom: "1px solid #334155", flexShrink: 0, flexWrap: "wrap" }}>
         <span style={{ fontWeight: "bold", color: "#38bdf8" }}>DEBUG IA</span>
+
+        {/* Statut global */}
         {!hasAI && (
           <span style={{ color: "#f59e0b", fontSize: 11 }}>
             ⚠ Aucun appel IA détecté — IA non configurée ou pipeline purement lexical
           </span>
         )}
-        {errorEntries.length > 0 && (
-          <span style={{ color: "#f87171", fontSize: 11 }}>
-            ✗ {errorEntries.length} erreur(s) — voir onglet Payload
+        {hasAI && hasErrors && !hasSuccess && (
+          <span style={{ color: "#f87171", fontSize: 11, fontWeight: "bold" }}>
+            ✗ APPEL IA ÉCHOUÉ — fallback lexical utilisé (voir onglet Payload)
           </span>
         )}
+        {hasAI && hasSuccess && (
+          <span style={{ color: "#34d399", fontSize: 11, fontWeight: "bold" }}>
+            ✓ Appel IA réussi
+          </span>
+        )}
+
+        {/* Résumé HTTP inline */}
+        {httpRequests.length > 0 && (
+          <span style={{ color: "#94a3b8", fontSize: 10 }}>
+            {httpRequests.map((r, i) => (
+              <span key={i}>
+                {r.provider} / {r.model} → {r.endpoint?.split("?")[0]}
+              </span>
+            ))}
+          </span>
+        )}
+        {httpErrors.map((e, i) => (
+          <span key={i} style={{ color: "#fca5a5", fontSize: 10, background: "#450a0a", padding: "1px 6px", borderRadius: 3 }}>
+            HTTP {e.httpStatus} {e.httpStatusText}
+          </span>
+        ))}
+
+        {/* Tabs */}
         <div style={{ display: "flex", gap: 4, marginLeft: 8 }}>
           {TABS.map((t) => (
             <button
@@ -71,73 +101,103 @@ export default function AIDebugPanel({ log, onClose }) {
             </button>
           ))}
         </div>
+
         <button
           onClick={onClose}
           style={{ marginLeft: "auto", background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 16, lineHeight: 1 }}
-          title="Fermer le panneau debug"
-        >
-          ✕
-        </button>
+          title="Fermer"
+        >✕</button>
       </div>
 
-      {/* Content */}
+      {/* ── Content ── */}
       <div style={{ overflow: "auto", flex: 1, padding: "8px 12px" }}>
 
-        {/* ── Onglet : Payload ── */}
+        {/* ── Payload ── */}
         {tab === "payload" && (
           <div>
+            {/* Erreurs HTTP en premier */}
+            {httpErrors.map((e, i) => (
+              <div key={i} style={{ marginBottom: 12, padding: "8px 12px", background: "#450a0a", border: "1px solid #7f1d1d", borderRadius: 6 }}>
+                <div style={{ color: "#f87171", fontWeight: "bold", marginBottom: 4 }}>
+                  ✗ Erreur HTTP {e.httpStatus} ({e.httpStatusText})
+                </div>
+                <div style={{ color: "#fca5a5", marginBottom: 2 }}>Endpoint : {e.endpoint}</div>
+                <div style={{ color: "#fca5a5", marginBottom: 4 }}>Message : {e.message}</div>
+                {e.errorBody && (
+                  <pre style={{ ...PRE, maxHeight: 100, color: "#fca5a5" }}>{JSON.stringify(e.errorBody, null, 2)}</pre>
+                )}
+              </div>
+            ))}
+
+            {errorEntries.map((e, i) => (
+              <div key={i} style={{ color: "#f87171", marginBottom: 8 }}>
+                ✗ Erreur{e.type === "batch_error" ? ` (lot ${e.batchIndex})` : ""} : {e.message}
+              </div>
+            ))}
+
             {payloadEntries.length === 0 ? (
-              <NoneMsg>Aucun payload — l'IA n'a pas été appelée (pipeline purement lexical).</NoneMsg>
+              <NoneMsg>Aucun payload — l'IA n'a pas été appelée.</NoneMsg>
             ) : payloadEntries.map((e, i) => (
               <div key={i} style={{ marginBottom: 16 }}>
                 <div style={{ color: "#7dd3fc", marginBottom: 4 }}>
-                  Lot {e.batchIndex ?? 0} / {e.labelsCount} étiquettes — provider : <b>{e.provider}</b> — model : <b>{e.model}</b> — temperature : {e.temperature} — max_tokens : {e.max_tokens}
+                  Lot {e.batchIndex ?? 0} — <b>provider :</b> {e.provider} — <b>model :</b> {e.model} — {e.labelsCount} étiquettes
                 </div>
+                {/* Endpoint affiché depuis http_request */}
+                {httpRequests[i] && (
+                  <div style={{ color: "#a78bfa", marginBottom: 6, fontSize: 11 }}>
+                    Endpoint : {httpRequests[i].endpoint?.split("?")[0]}
+                  </div>
+                )}
                 <div style={{ color: "#94a3b8", marginBottom: 4 }}>Étiquettes envoyées :</div>
                 <pre style={PRE}>{JSON.stringify(e.labels, null, 2)}</pre>
                 <button
                   onClick={() => setExpandPayload((v) => !v)}
-                  style={{ color: "#7dd3fc", background: "none", border: "none", cursor: "pointer", fontSize: 11, padding: 0, marginBottom: 4 }}
+                  style={{ color: "#7dd3fc", background: "none", border: "none", cursor: "pointer", fontSize: 11, padding: "4px 0", display: "block" }}
                 >
-                  {expandPayload ? "▼ Masquer le prompt système" : "▶ Afficher le prompt système complet"}
+                  {expandPayload ? "▼ Masquer les prompts" : "▶ Afficher les prompts système + user"}
                 </button>
                 {expandPayload && (
                   <>
-                    <div style={{ color: "#94a3b8", marginBottom: 2 }}>Message system :</div>
+                    <div style={{ color: "#94a3b8", marginBottom: 2 }}>Prompt système :</div>
                     <pre style={{ ...PRE, whiteSpace: "pre-wrap" }}>{e.messages?.[0]?.content}</pre>
-                    <div style={{ color: "#94a3b8", marginBottom: 2 }}>Message user :</div>
+                    <div style={{ color: "#94a3b8", marginBottom: 2 }}>Prompt user :</div>
                     <pre style={{ ...PRE, whiteSpace: "pre-wrap" }}>{e.messages?.[1]?.content}</pre>
                   </>
                 )}
               </div>
             ))}
-            {errorEntries.map((e, i) => (
-              <div key={i} style={{ color: "#f87171", marginBottom: 8 }}>
-                ✗ Erreur {e.type === "batch_error" ? `(lot ${e.batchIndex})` : ""} : {e.message}
-              </div>
-            ))}
           </div>
         )}
 
-        {/* ── Onglet : Réponse brute ── */}
+        {/* ── Réponse brute ── */}
         {tab === "raw" && (
           <div>
             {rawEntries.length === 0 ? (
-              <NoneMsg>Aucune réponse brute — l'IA n'a pas répondu.</NoneMsg>
+              <NoneMsg>
+                Aucune réponse brute.
+                {httpErrors.length > 0 && (
+                  <span style={{ color: "#f87171" }}> L'appel a échoué avec HTTP {httpErrors[0]?.httpStatus} : {httpErrors[0]?.message}</span>
+                )}
+              </NoneMsg>
             ) : rawEntries.map((e, i) => (
               <div key={i} style={{ marginBottom: 16 }}>
-                <div style={{ color: "#7dd3fc", marginBottom: 4 }}>Lot {e.batchIndex ?? 0} — Réponse brute du provider :</div>
-                <pre style={{ ...PRE, whiteSpace: "pre-wrap", maxHeight: 200 }}>{e.rawText}</pre>
+                <div style={{ color: "#7dd3fc", marginBottom: 4 }}>Lot {e.batchIndex ?? 0} — Réponse brute :</div>
+                <pre style={{ ...PRE, whiteSpace: "pre-wrap", maxHeight: 220 }}>{e.rawText}</pre>
               </div>
             ))}
           </div>
         )}
 
-        {/* ── Onglet : Réponse parsée ── */}
+        {/* ── Réponse parsée ── */}
         {tab === "parsed" && (
           <div>
             {parsedEntries.length === 0 ? (
-              <NoneMsg>Aucune réponse parsée — l'IA n'a pas répondu ou le parsing a échoué.</NoneMsg>
+              <NoneMsg>
+                Aucune réponse parsée.
+                {httpErrors.length > 0 && (
+                  <span style={{ color: "#f87171" }}> Cause : HTTP {httpErrors[0]?.httpStatus} — {httpErrors[0]?.message}</span>
+                )}
+              </NoneMsg>
             ) : parsedEntries.map((e, i) => (
               <div key={i} style={{ marginBottom: 16 }}>
                 <div style={{ color: "#7dd3fc", marginBottom: 4 }}>Lot {e.batchIndex ?? 0} — JSON parsé ({e.parsed?.length ?? 0} entrées) :</div>
@@ -147,11 +207,11 @@ export default function AIDebugPanel({ log, onClose }) {
           </div>
         )}
 
-        {/* ── Onglet : Décisions nœud par nœud ── */}
+        {/* ── Décisions par nœud ── */}
         {tab === "nodes" && (
           <div>
             {decisions.length === 0 ? (
-              <NoneMsg>Aucune décision enregistrée — lancez la génération de l'arbre à objectifs pour voir le diagnostic.</NoneMsg>
+              <NoneMsg>Lancez la génération pour voir le diagnostic.</NoneMsg>
             ) : (
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
                 <thead>
@@ -183,18 +243,24 @@ export default function AIDebugPanel({ log, onClose }) {
               </table>
             )}
             {decisions.length > 0 && (
-              <div style={{ marginTop: 8, color: "#94a3b8", fontSize: 11 }}>
-                {decisions.filter((d) => d.source === "ai").length} / {decisions.length} étiquettes affichées depuis l'IA.{" "}
+              <div style={{ marginTop: 8, fontSize: 11 }}>
+                <span style={{ color: decisions.filter((d) => d.source === "ai").length > 0 ? "#34d399" : "#fb923c" }}>
+                  {decisions.filter((d) => d.source === "ai").length} / {decisions.length} étiquettes depuis l'IA.
+                </span>
                 {decisions.filter((d) => d.source === "lexical" && d.aiContent).length > 0 && (
-                  <span style={{ color: "#f87171" }}>
-                    {decisions.filter((d) => d.source === "lexical" && d.aiContent).length} résultat(s) IA rejeté(s) (mécaniques).
+                  <span style={{ color: "#f87171", marginLeft: 8 }}>
+                    {decisions.filter((d) => d.source === "lexical" && d.aiContent).length} résultat(s) IA rejeté(s).
+                  </span>
+                )}
+                {decisions.every((d) => d.source === "lexical") && httpErrors.length > 0 && (
+                  <span style={{ color: "#f87171", marginLeft: 8, fontWeight: "bold" }}>
+                    ⚠ IA non disponible — fallback lexical utilisé (HTTP {httpErrors[0]?.httpStatus})
                   </span>
                 )}
               </div>
             )}
           </div>
         )}
-
       </div>
     </div>
   );
@@ -214,17 +280,5 @@ const PRE = {
   color: "#e2e8f0",
   fontSize: 11,
 };
-
-const TH = {
-  padding: "4px 8px",
-  borderBottom: "1px solid #334155",
-  fontWeight: "bold",
-  whiteSpace: "nowrap",
-};
-
-const TD = {
-  padding: "3px 8px",
-  verticalAlign: "top",
-  maxWidth: 220,
-  wordBreak: "break-word",
-};
+const TH = { padding: "4px 8px", borderBottom: "1px solid #334155", fontWeight: "bold", whiteSpace: "nowrap" };
+const TD = { padding: "3px 8px", verticalAlign: "top", maxWidth: 220, wordBreak: "break-word" };

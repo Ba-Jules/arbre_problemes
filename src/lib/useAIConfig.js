@@ -14,7 +14,7 @@ const DEFAULT_CONFIG = { provider: "", apiKey: "", model: "", configured: false 
 const PROVIDER_DEFAULTS = {
   openai:     { model: "gpt-4o",               label: "OpenAI",     hint: "sk-…" },
   anthropic:  { model: "claude-opus-4-6",      label: "Anthropic",  hint: "sk-ant-…" },
-  google:     { model: "gemini-1.5-pro-latest", label: "Gemini",     hint: "AIzaSy…" },
+  google:     { model: "gemini-2.0-flash",       label: "Gemini",     hint: "AIzaSy…" },
   openrouter: { model: "openai/gpt-4o",         label: "OpenRouter", hint: "sk-or-v1-…" },
   autre:      { model: "",                       label: "Autre",      hint: "Votre clé API…" },
 };

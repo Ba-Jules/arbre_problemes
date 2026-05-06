@@ -1,19 +1,13 @@
 /**
  * aiTransformer.js — Transformation IA des étiquettes
  *
- * Envoie les labels problèmes au fournisseur IA configuré et retourne
- * les versions transformées en objectifs GAR.
- *
  * Providers supportés :
- *   - openai     : api.openai.com (CORS OK depuis navigateur)
- *   - openrouter : openrouter.ai  (CORS OK, proxy multi-modèles)
- *   - google     : generativelanguage.googleapis.com (CORS OK)
- *   - anthropic  : api.anthropic.com (CORS limité — recommander OpenRouter)
- *
- * Toutes les fonctions sont async et rejettent avec une erreur descriptive.
+ *   - openai     : api.openai.com
+ *   - openrouter : openrouter.ai
+ *   - google     : generativelanguage.googleapis.com (v1beta)
+ *   - anthropic  : api.anthropic.com
  */
 
-/* ─── Prompt système ─────────────────────────────────────────────────────── */
 const SYSTEM_PROMPT = `Tu es expert en Gestion Axée sur les Résultats (GAR) et en arbres à objectifs (logframe).
 Ta tâche : transformer des étiquettes négatives (problèmes, causes, conséquences) en objectifs positifs et actionnables.
 
@@ -36,42 +30,58 @@ function buildUserMessage(labels) {
   return `Transforme ces étiquettes :\n[\n  ${items}\n]`;
 }
 
-/* ─── Parseur de réponse ─────────────────────────────────────────────────── */
 function parseAIResponse(text) {
-  // Essaie d'extraire un JSON array depuis le texte brut (parfois entouré de markdown)
   const jsonMatch = text.match(/\[[\s\S]*\]/);
   if (!jsonMatch) throw new Error("Réponse IA invalide : pas de JSON array trouvé");
   const parsed = JSON.parse(jsonMatch[0]);
   if (!Array.isArray(parsed)) throw new Error("Réponse IA invalide : pas un tableau");
-  return parsed; // [{id, content}]
+  return parsed;
+}
+
+/* ─── Helpers ────────────────────────────────────────────────────────────── */
+
+function maskKey(key = "") {
+  if (key.length <= 8) return "***";
+  return key.slice(0, 6) + "***" + key.slice(-3);
+}
+
+async function handleHttpError(res, provider, endpoint) {
+  const errBody = await res.json().catch(() => ({}));
+  const message = errBody?.error?.message || res.statusText || "Erreur inconnue";
+  const fullMsg = `${provider} ${res.status}: ${message}`;
+  const detail  = { httpStatus: res.status, httpStatusText: res.statusText, endpoint, errorBody: errBody, message: fullMsg };
+  return detail;
 }
 
 /* ─── Providers ──────────────────────────────────────────────────────────── */
 
-async function callOpenAI(messages, config) {
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+async function callOpenAI(messages, config, onDebug) {
+  const endpoint = "https://api.openai.com/v1/chat/completions";
+  const model    = config.model || "gpt-4o";
+  onDebug?.({ type: "http_request", provider: "openai", model, endpoint: endpoint });
+
+  const res = await fetch(endpoint, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.model || "gpt-4o",
-      messages,
-      temperature: 0.3,
-      max_tokens: 1000,
-    }),
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
+    body: JSON.stringify({ model, messages, temperature: 0.3, max_tokens: 1000 }),
   });
+
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`OpenAI ${res.status}: ${err?.error?.message || res.statusText}`);
+    const detail = await handleHttpError(res, "OpenAI", endpoint);
+    onDebug?.({ type: "http_error", ...detail });
+    throw new Error(detail.message);
   }
+  onDebug?.({ type: "http_ok", provider: "openai", status: res.status, endpoint });
   const data = await res.json();
   return data.choices[0].message.content;
 }
 
-async function callOpenRouter(messages, config) {
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+async function callOpenRouter(messages, config, onDebug) {
+  const endpoint = "https://openrouter.ai/api/v1/chat/completions";
+  const model    = config.model || "openai/gpt-4o";
+  onDebug?.({ type: "http_request", provider: "openrouter", model, endpoint });
+
+  const res = await fetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -79,27 +89,28 @@ async function callOpenRouter(messages, config) {
       "HTTP-Referer": window.location.origin,
       "X-Title": "Arbre à Objectifs GAR",
     },
-    body: JSON.stringify({
-      model: config.model || "openai/gpt-4o",
-      messages,
-      temperature: 0.3,
-      max_tokens: 1000,
-    }),
+    body: JSON.stringify({ model, messages, temperature: 0.3, max_tokens: 1000 }),
   });
+
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`OpenRouter ${res.status}: ${err?.error?.message || res.statusText}`);
+    const detail = await handleHttpError(res, "OpenRouter", endpoint);
+    onDebug?.({ type: "http_error", ...detail });
+    throw new Error(detail.message);
   }
+  onDebug?.({ type: "http_ok", provider: "openrouter", status: res.status, endpoint });
   const data = await res.json();
   return data.choices[0].message.content;
 }
 
-async function callGoogle(messages, config) {
-  const model = config.model || "gemini-1.5-flash";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.apiKey}`;
-  // Reconstituer le contenu Gemini à partir des messages chat
+async function callGoogle(messages, config, onDebug) {
+  const model    = config.model || "gemini-2.0-flash";
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const url      = `${endpoint}?key=${config.apiKey}`;
+  onDebug?.({ type: "http_request", provider: "google", model, endpoint: `${endpoint}?key=${maskKey(config.apiKey)}` });
+
   const systemMsg = messages.find((m) => m.role === "system")?.content || "";
-  const userMsg   = messages.find((m) => m.role === "user")?.content || "";
+  const userMsg   = messages.find((m) => m.role === "user")?.content   || "";
+
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -109,18 +120,26 @@ async function callGoogle(messages, config) {
       generationConfig: { temperature: 0.3, maxOutputTokens: 1000 },
     }),
   });
+
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`Google ${res.status}: ${err?.error?.message || res.statusText}`);
+    const detail = await handleHttpError(res, "Google", `${endpoint}?key=${maskKey(config.apiKey)}`);
+    onDebug?.({ type: "http_error", ...detail });
+    throw new Error(detail.message);
   }
+  onDebug?.({ type: "http_ok", provider: "google", status: res.status, model, endpoint });
   const data = await res.json();
   return data.candidates[0].content.parts[0].text;
 }
 
-async function callAnthropic(messages, config) {
+async function callAnthropic(messages, config, onDebug) {
+  const endpoint = "https://api.anthropic.com/v1/messages";
+  const model    = config.model || "claude-haiku-4-5-20251001";
+  onDebug?.({ type: "http_request", provider: "anthropic", model, endpoint });
+
   const systemMsg = messages.find((m) => m.role === "system")?.content || "";
   const userMsgs  = messages.filter((m) => m.role !== "system");
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+
+  const res = await fetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -128,31 +147,21 @@ async function callAnthropic(messages, config) {
       "anthropic-version": "2023-06-01",
       "anthropic-dangerous-direct-browser-access": "true",
     },
-    body: JSON.stringify({
-      model: config.model || "claude-haiku-4-5-20251001",
-      max_tokens: 1000,
-      system: systemMsg,
-      messages: userMsgs,
-      temperature: 0.3,
-    }),
+    body: JSON.stringify({ model, max_tokens: 1000, system: systemMsg, messages: userMsgs, temperature: 0.3 }),
   });
+
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`Anthropic ${res.status}: ${err?.error?.message || res.statusText}`);
+    const detail = await handleHttpError(res, "Anthropic", endpoint);
+    onDebug?.({ type: "http_error", ...detail });
+    throw new Error(detail.message);
   }
+  onDebug?.({ type: "http_ok", provider: "anthropic", status: res.status, endpoint });
   const data = await res.json();
   return data.content[0].text;
 }
 
 /* ─── Point d'entrée principal ───────────────────────────────────────────── */
-/**
- * Transforme un lot d'étiquettes via l'IA configurée.
- *
- * @param {Array<{id:string, text:string, type:"problem"|"causes"|"consequences"}>} labels
- * @param {{ provider:string, apiKey:string, model:string }} config
- * @param {function?} onDebug - callback optionnel pour le mode debug : (event) => void
- * @returns {Promise<Array<{id:string, content:string}>>}
- */
+
 export async function transformWithAI(labels, config, onDebug) {
   if (!labels?.length) return [];
   if (!config?.provider || !config?.apiKey) {
@@ -174,26 +183,26 @@ export async function transformWithAI(labels, config, onDebug) {
     labels,
     messages,
   };
-  console.log("[IA] CALLING IA WITH:", debugPayload);
+  console.log("[IA] CALLING IA WITH:", { provider: config.provider, model: config.model, labelsCount: labels.length });
   onDebug?.(debugPayload);
 
   let rawText;
   try {
     switch (config.provider) {
       case "openai":
-        rawText = await callOpenAI(messages, config);
+        rawText = await callOpenAI(messages, config, onDebug);
         break;
       case "openrouter":
-        rawText = await callOpenRouter(messages, config);
+        rawText = await callOpenRouter(messages, config, onDebug);
         break;
       case "google":
-        rawText = await callGoogle(messages, config);
+        rawText = await callGoogle(messages, config, onDebug);
         break;
       case "anthropic":
-        rawText = await callAnthropic(messages, config);
+        rawText = await callAnthropic(messages, config, onDebug);
         break;
       default:
-        rawText = await callOpenAI(messages, config);
+        rawText = await callOpenAI(messages, config, onDebug);
     }
   } catch (err) {
     onDebug?.({ type: "error", message: err.message });
@@ -208,16 +217,6 @@ export async function transformWithAI(labels, config, onDebug) {
   return parsed;
 }
 
-/**
- * Transforme les labels avec l'IA, en lot de taille `batchSize`.
- * Retourne un Map id → content. Si l'IA échoue sur un lot, les IDs
- * du lot sont absents du résultat (le caller peut utiliser le fallback lexical).
- *
- * @param {Array} labels
- * @param {object} config
- * @param {number} batchSize
- * @returns {Promise<Map<string, string>>}
- */
 export async function transformWithAIBatched(labels, config, batchSize = 20, onDebug) {
   const resultMap = new Map();
   for (let i = 0; i < labels.length; i += batchSize) {
