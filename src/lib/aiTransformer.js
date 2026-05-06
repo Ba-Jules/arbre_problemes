@@ -217,6 +217,79 @@ export async function transformWithAI(labels, config, onDebug) {
   return parsed;
 }
 
+/* ─── Détection de stratégies IA ─────────────────────────────────────────── */
+
+const STRATEGY_SYSTEM = `Tu es expert en Gestion Axée sur les Résultats (GAR) et en logframe.
+Ton rôle : analyser un arbre à objectifs et proposer des stratégies d'intervention cohérentes.
+Réponds UNIQUEMENT avec un tableau JSON valide, rien d'autre.`;
+
+/**
+ * Envoie les données de l'arbre à l'IA et reçoit des groupes de stratégies.
+ *
+ * @param {{ central, means, ends, meansConnections }} chainsData
+ * @param {{ provider, apiKey, model }} config
+ * @param {function?} onDebug
+ * @returns {Promise<Array<{name:string, nodeIds:string[], rationale:string}>>}
+ */
+export async function detectStrategiesWithAI(chainsData, config, onDebug) {
+  if (!config?.provider || !config?.apiKey) throw new Error("IA non configurée");
+
+  const { central, means, ends, meansConnections } = chainsData;
+
+  const lines = [
+    `OBJECTIF CENTRAL : "${central.content}"`,
+    ``,
+    `MOYENS (à regrouper en stratégies) :`,
+    ...means.map((m, i) => `${i + 1}. [${m.id}] "${m.content}"`),
+    ``,
+    `FINS visées (impacts attendus) :`,
+    ...ends.map((e, i) => `${i + 1}. "${e.content}"`),
+  ];
+
+  if (meansConnections.length > 0) {
+    lines.push(``, `LIENS entre certains moyens :`);
+    meansConnections.slice(0, 20).forEach((c) => lines.push(`- "${c.from}" ↔ "${c.to}"`));
+  }
+
+  lines.push(
+    ``,
+    `Regroupe ces ${means.length} moyen(s) en 2 à 3 stratégies cohérentes selon leur logique métier ou domaine d'action.`,
+    `Chaque moyen doit appartenir à exactement une stratégie.`,
+    ``,
+    `Réponds UNIQUEMENT avec ce JSON valide (en français) :`,
+    `[{"name": "Nom court (3-5 mots)", "nodeIds": ["id_exact_du_moyen", ...], "rationale": "Une phrase expliquant la cohérence stratégique"}]`
+  );
+
+  const messages = [
+    { role: "system", content: STRATEGY_SYSTEM },
+    { role: "user",   content: lines.join("\n") },
+  ];
+
+  console.log("[IA] CALLING IA FOR STRATEGIES:", { provider: config.provider, model: config.model, meansCount: means.length });
+  onDebug?.({ type: "payload", provider: config.provider, model: config.model, labelsCount: means.length, labels: means, messages });
+
+  let rawText;
+  try {
+    switch (config.provider) {
+      case "openai":     rawText = await callOpenAI(messages, config, onDebug);     break;
+      case "openrouter": rawText = await callOpenRouter(messages, config, onDebug); break;
+      case "google":     rawText = await callGoogle(messages, config, onDebug);     break;
+      case "anthropic":  rawText = await callAnthropic(messages, config, onDebug);  break;
+      default:           rawText = await callOpenAI(messages, config, onDebug);
+    }
+  } catch (err) {
+    onDebug?.({ type: "error", message: err.message });
+    throw err;
+  }
+
+  onDebug?.({ type: "raw", rawText });
+  const parsed = parseAIResponse(rawText);
+  onDebug?.({ type: "parsed", parsed });
+  return parsed;
+}
+
+/* ─── Transformation en lots ─────────────────────────────────────────────── */
+
 export async function transformWithAIBatched(labels, config, batchSize = 20, onDebug) {
   const resultMap = new Map();
   for (let i = 0; i < labels.length; i += batchSize) {

@@ -32,8 +32,8 @@ import {
   generateObjectiveTree,
   transformProblemLabelToObjectiveLabel,
 } from "./lib/objectiveTransformer";
-import { detectStrategies, STRATEGY_COLORS } from "./lib/strategyDetector";
-import { transformWithAIBatched } from "./lib/aiTransformer";
+import { detectStrategies, buildChainsForAI, STRATEGY_COLORS } from "./lib/strategyDetector";
+import { transformWithAIBatched, detectStrategiesWithAI } from "./lib/aiTransformer";
 import {
   Paintbrush,
   Link2,
@@ -881,7 +881,33 @@ export default function App() {
   };
 
   /** Détecte et stocke les stratégies à partir de l'arbre à objectifs courant. */
-  const handleDetectStrategies = () => {
+  const handleDetectStrategies = async () => {
+    if (config.configured) {
+      const chainsData = buildChainsForAI(objectiveNodes, objectiveConnections);
+      setAiDebugLog([]);
+      try {
+        const aiResult = await detectStrategiesWithAI(chainsData, config, (evt) =>
+          setAiDebugLog((prev) => [...prev, evt])
+        );
+        const { centralId, endIds } = chainsData;
+        const result = aiResult.map((s, i) => ({
+          id: `strategy-${i + 1}`,
+          name: s.name,
+          rationale: s.rationale,
+          nodes: [...(s.nodeIds || []), ...(centralId ? [centralId] : []), ...endIds],
+          color: STRATEGY_COLORS[i % STRATEGY_COLORS.length],
+          score: null,
+          impact: endIds.length,
+          length: (s.nodeIds || []).length,
+        }));
+        setStrategies(result);
+        setShowStrategies(true);
+        return;
+      } catch (err) {
+        setAiDebugLog((prev) => [...prev, { type: "error", message: err.message }]);
+        console.warn("[Stratégies] IA échoué, fallback BFS :", err.message);
+      }
+    }
     const result = detectStrategies(objectiveNodes, objectiveConnections, 3);
     setStrategies(result);
     setShowStrategies(true);
@@ -1155,7 +1181,7 @@ export default function App() {
               className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded-full text-[8px] font-black uppercase tracking-wider whitespace-nowrap pointer-events-none"
               style={{ backgroundColor: strategy.color.bg, color: strategy.color.text }}
             >
-              {strategy.color.label}
+              {strategy.name || strategy.color.label}
             </div>
           )}
           {/* Point de statut validation */}
@@ -2190,9 +2216,9 @@ export default function App() {
               {/* Légende statuts + stratégies */}
               <div className="ml-auto flex items-center gap-2 text-[10px] text-slate-500 flex-wrap">
                 {showStrategies && strategies.map((s) => (
-                  <span key={s.id} className="inline-flex items-center gap-1 font-semibold" style={{ color: s.color.bg }}>
+                  <span key={s.id} className="inline-flex items-center gap-1 font-semibold" style={{ color: s.color.bg }} title={s.rationale || ""}>
                     <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ backgroundColor: s.color.bg }} />
-                    {s.color.label} (score {s.score.toFixed(2)})
+                    {s.name || s.color.label}{s.score != null ? ` (score ${s.score.toFixed(2)})` : ""}
                   </span>
                 ))}
                 {strategies.length > 0 && <span className="text-slate-300">|</span>}
@@ -2438,8 +2464,9 @@ export default function App() {
             )}
             <span className="text-green-700 font-bold">Arbre à Objectifs</span>
             {showStrategies && strategies.length > 0 && strategies.map((s) => (
-              <span key={s.id} className="inline-flex items-center gap-1 text-[10px] font-semibold" style={{ color: s.color.bg }}>
-                <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: s.color.bg }} />{s.color.label}
+              <span key={s.id} className="inline-flex items-center gap-1 text-[10px] font-semibold" style={{ color: s.color.bg }} title={s.rationale || ""}>
+                <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: s.color.bg }} />
+                {s.name || s.color.label}
               </span>
             ))}
           </>

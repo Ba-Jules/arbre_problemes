@@ -111,6 +111,38 @@ function jaccardMeans(clusterA, clusterB) {
   return union === 0 ? 1 : intersect / union;
 }
 
+/* ─── Données pour l'IA ──────────────────────────────────────────────────── */
+/**
+ * Extrait les données structurées de l'arbre à objectifs pour l'envoi à l'IA.
+ * @param {Array} nodes
+ * @param {Array} connections
+ * @returns {{ central, means, ends, meansConnections, centralId, endIds }}
+ */
+export function buildChainsForAI(nodes, connections) {
+  const central = nodes.find((n) => n.objectiveType === "central");
+  const means   = nodes.filter((n) => n.objectiveType === "means");
+  const ends    = nodes.filter((n) => n.objectiveType === "ends");
+
+  const meansById = Object.fromEntries(means.map((n) => [n.id, n]));
+  const meansSet  = new Set(means.map((n) => n.id));
+
+  const meansConnections = connections
+    .filter((c) => meansSet.has(c.fromId) && meansSet.has(c.toId))
+    .map((c) => ({
+      from: meansById[c.fromId]?.content ?? c.fromId,
+      to:   meansById[c.toId]?.content   ?? c.toId,
+    }));
+
+  return {
+    central:          { id: central?.id, content: central?.content },
+    means:            means.map((m) => ({ id: m.id, content: m.content })),
+    ends:             ends.map((e)  => ({ id: e.id, content: e.content })),
+    meansConnections,
+    centralId:        central?.id ?? null,
+    endIds:           ends.map((e) => e.id),
+  };
+}
+
 /* ─── Point d'entrée ─────────────────────────────────────────────────────── */
 /**
  * @param {Array} nodes        — objectiveNodes
