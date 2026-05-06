@@ -25,6 +25,7 @@ import { db } from "./firebase-config";
 import QRCodeGenerator from "./components/QRCodeGenerator.jsx";
 import AnalysisPanel from "./components/AnalysisPanel.jsx";
 import ArbreProblemePresentation from "./components/ArbreProblemePresentation.jsx";
+import AIDebugPanel from "./components/AIDebugPanel.jsx";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import {
@@ -190,6 +191,8 @@ export default function App() {
   const { config: aiConfig, PROVIDER_DEFAULTS: AI_PROVIDER_DEFAULTS } = useAIConfig();
   const [isAIGenerating, setIsAIGenerating] = useState(false);
   const [aiGenerationStatus, setAiGenerationStatus] = useState(""); // message d'avancement
+  const [debugAI, setDebugAI] = useState(false);
+  const [aiDebugLog, setAiDebugLog] = useState([]);
 
   /* -------- Export (PDF/PNG) -------- */
   const [exportMode, setExportMode] = useState(false); // active le rendu sans clamp + hauteurs dynamiques
@@ -784,6 +787,10 @@ export default function App() {
       console.log("[doGenerateObjectiveTree] IA configurée, lancement de transformWithAIBatched");
       setIsAIGenerating(true);
       setAiGenerationStatus("L'IA améliore les étiquettes…");
+
+      const debugEntries = [];
+      const onDebug = (evt) => debugEntries.push({ ...evt, ts: Date.now() });
+
       try {
         const labels = result.nodes
           .filter((n) => n.sourceLabel)
@@ -793,28 +800,41 @@ export default function App() {
             type: n.sourceType,
           }));
 
-        const aiMap = await transformWithAIBatched(labels, aiConfig, 20);
+        const aiMap = await transformWithAIBatched(labels, aiConfig, 20, onDebug);
         console.log("[doGenerateObjectiveTree] aiMap reçu :", Object.fromEntries(aiMap));
 
         // Mots mécaniques à rejeter dans les sorties IA
         const MOTS_MECANIQUES = /\b(amélioré[e]?s?|renforcé[e]?s?|optimisé[e]?s?|réduit[e]?s?|confuse?s?|insuffisant[e]?s?|fréquente?s?|faibles?|complexes?)\b/i;
 
-        let accepted = 0;
-        let rejected = 0;
+        // Calcul des décisions par nœud (avant setObjectiveNodes pour cohérence)
+        const nodeDecisions = result.nodes
+          .filter((n) => n.sourceLabel)
+          .map((n) => {
+            const aiContent = aiMap.get(n.id) ?? null;
+            const lexicalContent = n._lexicalContent ?? n.content;
+            const lexicalStructure = n._lexicalStructure ?? "unknown";
+            if (!aiContent) {
+              return { nodeId: n.id, sourceLabel: n.sourceLabel, lexicalContent, lexicalStructure, aiContent: null, accepted: false, source: "lexical", reason: "absent du résultat IA" };
+            }
+            if (MOTS_MECANIQUES.test(aiContent)) {
+              console.log(`[IA] Rejeté (mécanique) : "${aiContent}" ← "${n.sourceLabel}"`);
+              return { nodeId: n.id, sourceLabel: n.sourceLabel, lexicalContent, lexicalStructure, aiContent, accepted: false, source: "lexical", reason: `rejeté : mot mécanique détecté` };
+            }
+            return { nodeId: n.id, sourceLabel: n.sourceLabel, lexicalContent, lexicalStructure, aiContent, accepted: true, source: "ai", reason: "accepté" };
+          });
+        debugEntries.push({ type: "node_decisions", decisions: nodeDecisions });
+
+        const accepted = nodeDecisions.filter((d) => d.source === "ai").length;
+        const rejected = nodeDecisions.filter((d) => d.source === "lexical" && d.aiContent !== null).length;
+
         if (aiMap.size > 0) {
           setObjectiveNodes((prev) =>
             prev.map((n) => {
-              const aiContent = aiMap.get(n.id);
-              if (!aiContent) return n;
-              if (MOTS_MECANIQUES.test(aiContent)) {
-                console.log(`[IA] Rejeté (mécanique) : "${aiContent}" ← "${n.sourceLabel}"`);
-                rejected++;
-                return n; // conserver le résultat lexical
-              }
-              accepted++;
+              const decision = nodeDecisions.find((d) => d.nodeId === n.id);
+              if (!decision || decision.source !== "ai") return n;
               return {
                 ...n,
-                content: aiContent,
+                content: decision.aiContent,
                 validation: {
                   ...n.validation,
                   status: "generated",
@@ -835,9 +855,24 @@ export default function App() {
         setAiGenerationStatus(`IA indisponible : ${err.message.slice(0, 80)}`);
       } finally {
         setIsAIGenerating(false);
+        setAiDebugLog(debugEntries);
         setTimeout(() => setAiGenerationStatus(""), 5000);
       }
     } else {
+      // Pas d'IA : enregistrer quand même les décisions lexicales pour le debug
+      const nodeDecisions = result.nodes
+        .filter((n) => n.sourceLabel)
+        .map((n) => ({
+          nodeId: n.id,
+          sourceLabel: n.sourceLabel,
+          lexicalContent: n._lexicalContent ?? n.content,
+          lexicalStructure: n._lexicalStructure ?? "unknown",
+          aiContent: null,
+          accepted: false,
+          source: "lexical",
+          reason: "IA non configurée",
+        }));
+      setAiDebugLog([{ type: "node_decisions", decisions: nodeDecisions, ts: Date.now() }]);
       console.log("[doGenerateObjectiveTree] IA non configurée — résultat lexical conservé");
     }
   };
@@ -2508,8 +2543,8 @@ export default function App() {
     <div className="min-h-screen bg-slate-50">
 
       {/* ══════════════════════════════ HEADER ══════════════════════════════ */}
-      <header className="sticky top-0 z-40 bg-white border-b border-gray-100 shadow-sm">
-        <div className="flex items-center h-14 px-4 gap-0 min-w-0">
+      <header className="sticky top-0 z-40 bg-white border-b border-gray-100 shadow-sm overflow-x-auto">
+        <div className="flex items-center h-14 px-4 gap-0" style={{ minWidth: "max-content" }}>
 
           {/* ── 1. Brand ── */}
           <div className="flex items-center gap-2.5 pr-4 border-r border-gray-100 shrink-0">
@@ -2732,6 +2767,21 @@ export default function App() {
                 <span>{treeMode === "objectives" ? "Régénérer" : "Objectifs"}</span>
               </button>
             )}
+
+            {/* Bouton Debug IA — toujours visible */}
+            <button
+              type="button"
+              className={[
+                "inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                debugAI
+                  ? "bg-slate-900 text-cyan-400 border-cyan-700 hover:bg-slate-800"
+                  : "bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200",
+              ].join(" ")}
+              onClick={() => setDebugAI((v) => !v)}
+              title="Afficher/masquer le panneau de diagnostic du pipeline IA"
+            >
+              <span style={{ fontFamily: "monospace", fontSize: 10 }}>DEBUG</span>
+            </button>
 
             {/* Bouton Stratégies (mode objectifs uniquement) */}
             {treeMode === "objectives" && (
@@ -3122,6 +3172,14 @@ export default function App() {
           </div>
         );
       })()}
+
+      {/* ── Panneau Debug IA ── */}
+      {debugAI && (
+        <AIDebugPanel
+          log={aiDebugLog}
+          onClose={() => setDebugAI(false)}
+        />
+      )}
     </div>
   );
 }

@@ -150,9 +150,10 @@ async function callAnthropic(messages, config) {
  *
  * @param {Array<{id:string, text:string, type:"problem"|"causes"|"consequences"}>} labels
  * @param {{ provider:string, apiKey:string, model:string }} config
+ * @param {function?} onDebug - callback optionnel pour le mode debug : (event) => void
  * @returns {Promise<Array<{id:string, content:string}>>}
  */
-export async function transformWithAI(labels, config) {
+export async function transformWithAI(labels, config, onDebug) {
   if (!labels?.length) return [];
   if (!config?.provider || !config?.apiKey) {
     throw new Error("IA non configurée");
@@ -163,26 +164,46 @@ export async function transformWithAI(labels, config) {
     { role: "user",   content: buildUserMessage(labels) },
   ];
 
+  onDebug?.({
+    type: "payload",
+    provider: config.provider,
+    model: config.model || "(défaut provider)",
+    temperature: 0.3,
+    max_tokens: 1000,
+    labelsCount: labels.length,
+    labels,
+    messages,
+  });
+
   let rawText;
-  switch (config.provider) {
-    case "openai":
-      rawText = await callOpenAI(messages, config);
-      break;
-    case "openrouter":
-      rawText = await callOpenRouter(messages, config);
-      break;
-    case "google":
-      rawText = await callGoogle(messages, config);
-      break;
-    case "anthropic":
-      rawText = await callAnthropic(messages, config);
-      break;
-    default:
-      // Tenter comme OpenAI-compatible
-      rawText = await callOpenAI(messages, config);
+  try {
+    switch (config.provider) {
+      case "openai":
+        rawText = await callOpenAI(messages, config);
+        break;
+      case "openrouter":
+        rawText = await callOpenRouter(messages, config);
+        break;
+      case "google":
+        rawText = await callGoogle(messages, config);
+        break;
+      case "anthropic":
+        rawText = await callAnthropic(messages, config);
+        break;
+      default:
+        rawText = await callOpenAI(messages, config);
+    }
+  } catch (err) {
+    onDebug?.({ type: "error", message: err.message });
+    throw err;
   }
 
-  return parseAIResponse(rawText);
+  onDebug?.({ type: "raw", rawText });
+
+  const parsed = parseAIResponse(rawText);
+  onDebug?.({ type: "parsed", parsed });
+
+  return parsed;
 }
 
 /**
@@ -195,18 +216,21 @@ export async function transformWithAI(labels, config) {
  * @param {number} batchSize
  * @returns {Promise<Map<string, string>>}
  */
-export async function transformWithAIBatched(labels, config, batchSize = 20) {
+export async function transformWithAIBatched(labels, config, batchSize = 20, onDebug) {
   const resultMap = new Map();
   for (let i = 0; i < labels.length; i += batchSize) {
     const batch = labels.slice(i, i + batchSize);
+    const batchOnDebug = onDebug
+      ? (evt) => onDebug({ ...evt, batchIndex: i, batchTotal: labels.length })
+      : undefined;
     try {
-      const results = await transformWithAI(batch, config);
+      const results = await transformWithAI(batch, config, batchOnDebug);
       for (const r of results) {
         if (r.id && r.content) resultMap.set(r.id, r.content.trim());
       }
     } catch (err) {
+      onDebug?.({ type: "batch_error", batchIndex: i, message: err.message });
       console.warn(`[aiTransformer] lot ${i}–${i + batchSize} échoué :`, err.message);
-      // Les IDs de ce lot ne seront pas dans le Map → fallback lexical côté caller
     }
   }
   return resultMap;

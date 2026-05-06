@@ -821,6 +821,8 @@ export function generateObjectiveTree(problemPostIts, problemConns) {
       sourceLabel: p.content,
       sourceType: p.category === "problem" ? "problem" : p.category === "causes" ? "cause" : "consequence",
       content: transformedLabel,
+      _lexicalContent: transformedLabel,
+      _lexicalStructure: analysis.structure,
       objectiveType,
       semanticType,
       x: p.x,
