@@ -882,11 +882,11 @@ export default function App() {
 
   /** Détecte et stocke les stratégies à partir de l'arbre à objectifs courant. */
   const handleDetectStrategies = async () => {
-    if (config.configured) {
+    if (aiConfig.configured) {
       const chainsData = buildChainsForAI(objectiveNodes, objectiveConnections);
       setAiDebugLog([]);
       try {
-        const aiResult = await detectStrategiesWithAI(chainsData, config, (evt) =>
+        const aiResult = await detectStrategiesWithAI(chainsData, aiConfig, (evt) =>
           setAiDebugLog((prev) => [...prev, evt])
         );
         const { centralId, endIds } = chainsData;
