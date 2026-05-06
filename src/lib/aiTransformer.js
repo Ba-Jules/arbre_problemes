@@ -164,7 +164,7 @@ export async function transformWithAI(labels, config, onDebug) {
     { role: "user",   content: buildUserMessage(labels) },
   ];
 
-  onDebug?.({
+  const debugPayload = {
     type: "payload",
     provider: config.provider,
     model: config.model || "(défaut provider)",
@@ -173,7 +173,9 @@ export async function transformWithAI(labels, config, onDebug) {
     labelsCount: labels.length,
     labels,
     messages,
-  });
+  };
+  console.log("[IA] CALLING IA WITH:", debugPayload);
+  onDebug?.(debugPayload);
 
   let rawText;
   try {

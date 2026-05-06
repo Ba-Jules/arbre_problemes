@@ -772,6 +772,7 @@ export default function App() {
   /** Effectue la (ré)génération effective de l'arbre à objectifs. */
   const doGenerateObjectiveTree = async () => {
     console.log("[doGenerateObjectiveTree] Démarrage — objectiveTransformer v5");
+    console.log("[doGenerateObjectiveTree] aiConfig =", JSON.stringify({ provider: aiConfig?.provider, configured: aiConfig?.configured, hasKey: !!aiConfig?.apiKey }));
 
     // 1. Génération lexicale de base (synchrone, rapide)
     const result = generateObjectiveTree(postIts, connections);
