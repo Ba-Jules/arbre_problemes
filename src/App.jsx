@@ -882,32 +882,36 @@ export default function App() {
 
   /** Détecte et stocke les stratégies à partir de l'arbre à objectifs courant. */
   const handleDetectStrategies = async () => {
-    if (aiConfig.configured) {
-      const chainsData = buildChainsForAI(objectiveNodes, objectiveConnections);
-      setAiDebugLog([]);
-      try {
-        const aiResult = await detectStrategiesWithAI(chainsData, aiConfig, (evt) =>
-          setAiDebugLog((prev) => [...prev, evt])
-        );
-        const { centralId, endIds } = chainsData;
-        const result = aiResult.map((s, i) => ({
-          id: `strategy-${i + 1}`,
-          name: s.name,
-          rationale: s.rationale,
-          nodes: [...(s.nodeIds || []), ...(centralId ? [centralId] : []), ...endIds],
-          color: STRATEGY_COLORS[i % STRATEGY_COLORS.length],
-          score: null,
-          impact: endIds.length,
-          length: (s.nodeIds || []).length,
-        }));
-        setStrategies(result);
-        setShowStrategies(true);
-        return;
-      } catch (err) {
-        setAiDebugLog((prev) => [...prev, { type: "error", message: err.message }]);
-        console.warn("[Stratégies] IA échoué, fallback BFS :", err.message);
+    try {
+      if (aiConfig.configured) {
+        const chainsData = buildChainsForAI(objectiveNodes, objectiveConnections);
+        if (chainsData) {
+          setAiDebugLog([]);
+          const aiResult = await detectStrategiesWithAI(
+            chainsData, aiConfig,
+            (evt) => setAiDebugLog((prev) => [...prev, evt])
+          );
+          const { centralId, endIds } = chainsData;
+          const result = aiResult.map((s, i) => ({
+            id:       `strategy-${i + 1}`,
+            name:     s.name,
+            rationale: s.rationale,
+            nodes:    [...(s.nodeIds || []), ...(centralId ? [centralId] : []), ...endIds],
+            color:    STRATEGY_COLORS[i % STRATEGY_COLORS.length],
+            score:    null,
+            impact:   endIds.length,
+            length:   (s.nodeIds || []).length,
+          }));
+          setStrategies(result);
+          setShowStrategies(true);
+          return;
+        }
       }
+    } catch (err) {
+      console.warn("[Stratégies] IA échoué, fallback BFS :", err.message);
+      setAiDebugLog((prev) => [...prev, { type: "error", message: err.message }]);
     }
+    // Fallback BFS — toujours garanti
     const result = detectStrategies(objectiveNodes, objectiveConnections, 3);
     setStrategies(result);
     setShowStrategies(true);

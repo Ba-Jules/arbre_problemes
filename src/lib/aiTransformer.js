@@ -233,31 +233,46 @@ Réponds UNIQUEMENT avec un tableau JSON valide, rien d'autre.`;
  */
 export async function detectStrategiesWithAI(chainsData, config, onDebug) {
   if (!config?.provider || !config?.apiKey) throw new Error("IA non configurée");
+  if (!chainsData?.central?.content || !chainsData?.means?.length) {
+    throw new Error("Arbre incomplet : objectif central ou moyens manquants");
+  }
 
-  const { central, means, ends, meansConnections } = chainsData;
+  const { central, means, ends, chains, meansConnections } = chainsData;
 
   const lines = [
+    `ARBRE À OBJECTIFS`,
+    ``,
     `OBJECTIF CENTRAL : "${central.content}"`,
     ``,
-    `MOYENS (à regrouper en stratégies) :`,
-    ...means.map((m, i) => `${i + 1}. [${m.id}] "${m.content}"`),
+    `MOYENS D'INTERVENTION (${means.length}) :`,
+    ...means.map((m, i) => `  ${i + 1}. [${m.id}] "${m.content}"`),
     ``,
-    `FINS visées (impacts attendus) :`,
-    ...ends.map((e, i) => `${i + 1}. "${e.content}"`),
+    `FINS ATTENDUES (${ends.length}) :`,
+    ...ends.map((e, i) => `  ${i + 1}. "${e.content}"`),
   ];
 
-  if (meansConnections.length > 0) {
-    lines.push(``, `LIENS entre certains moyens :`);
-    meansConnections.slice(0, 20).forEach((c) => lines.push(`- "${c.from}" ↔ "${c.to}"`));
+  if (chains?.length > 0) {
+    lines.push(``, `CHAÎNES D'INTERVENTION COMPLÈTES (moyen(s) → objectif central → fin(s)) :`);
+    chains.forEach((c, i) => {
+      lines.push(`  Chaîne ${i + 1} [IDs concernés : ${c.meansIds.join(", ")}]`);
+      lines.push(`    ${c.path}`);
+    });
+  }
+
+  if (meansConnections?.length > 0) {
+    lines.push(``, `LIENS ENTRE MOYENS :`);
+    meansConnections.slice(0, 20).forEach((c) => lines.push(`  "${c.from}" ↔ "${c.to}"`));
   }
 
   lines.push(
     ``,
-    `Regroupe ces ${means.length} moyen(s) en 2 à 3 stratégies cohérentes selon leur logique métier ou domaine d'action.`,
+    `INSTRUCTION : Regroupe ces ${means.length} moyen(s) en 2 à 3 stratégies cohérentes`,
+    `selon leur logique d'intervention (domaine, niveau d'action, synergie).`,
     `Chaque moyen doit appartenir à exactement une stratégie.`,
+    `Utilise les IDs exacts entre crochets — ne les modifie pas.`,
     ``,
-    `Réponds UNIQUEMENT avec ce JSON valide (en français) :`,
-    `[{"name": "Nom court (3-5 mots)", "nodeIds": ["id_exact_du_moyen", ...], "rationale": "Une phrase expliquant la cohérence stratégique"}]`
+    `Réponds UNIQUEMENT avec ce JSON valide (en français), rien d'autre :`,
+    `[{"name": "Nom 3-5 mots", "nodeIds": ["id_exact_1", "id_exact_2"], "rationale": "1 phrase sur la logique stratégique"}]`
   );
 
   const messages = [

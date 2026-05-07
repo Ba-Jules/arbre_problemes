@@ -113,20 +113,108 @@ function jaccardMeans(clusterA, clusterB) {
 
 /* ─── Données pour l'IA ──────────────────────────────────────────────────── */
 /**
- * Extrait les données structurées de l'arbre à objectifs pour l'envoi à l'IA.
+ * Construit les chaînes d'intervention complètes (moyen(s) → central → fin(s))
+ * à partir du graphe non-dirigé de l'arbre à objectifs.
+ *
  * @param {Array} nodes
  * @param {Array} connections
- * @returns {{ central, means, ends, meansConnections, centralId, endIds }}
+ * @returns {{ central, means, ends, chains, meansConnections, centralId, endIds } | null}
  */
 export function buildChainsForAI(nodes, connections) {
+  if (!nodes?.length) return null;
+
   const central = nodes.find((n) => n.objectiveType === "central");
-  const means   = nodes.filter((n) => n.objectiveType === "means");
-  const ends    = nodes.filter((n) => n.objectiveType === "ends");
+  if (!central) return null;
 
-  const meansById = Object.fromEntries(means.map((n) => [n.id, n]));
-  const meansSet  = new Set(means.map((n) => n.id));
+  const means  = nodes.filter((n) => n.objectiveType === "means");
+  const ends   = nodes.filter((n) => n.objectiveType === "ends");
 
-  const meansConnections = connections
+  if (means.length === 0) return null;
+
+  const nodeById = Object.fromEntries(nodes.map((n) => [n.id, n]));
+  const meansSet = new Set(means.map((n) => n.id));
+  const endsSet  = new Set(ends.map((n) => n.id));
+  const centralId = central.id;
+
+  // Adjacence non-dirigée complète
+  const adj = {};
+  for (const n of nodes) adj[n.id] = [];
+  for (const c of (connections || [])) {
+    if (adj[c.fromId] !== undefined) adj[c.fromId].push(c.toId);
+    if (adj[c.toId]   !== undefined) adj[c.toId].push(c.fromId);
+  }
+
+  /* Moyens directement reliés au central */
+  const gatewayMeans = means.filter((m) => (adj[m.id] || []).includes(centralId));
+
+  /* Pour un moyen passerelle, collecte tous les sous-moyens (BFS means-only) */
+  function collectSubMeans(gatewayId) {
+    const sub = [];
+    const visited = new Set([centralId, gatewayId]);
+    const queue = [...(adj[gatewayId] || []).filter((id) => meansSet.has(id))];
+    while (queue.length) {
+      const id = queue.shift();
+      if (visited.has(id) || !meansSet.has(id)) continue;
+      visited.add(id);
+      sub.push(nodeById[id]);
+      for (const nb of (adj[id] || [])) {
+        if (!visited.has(nb) && meansSet.has(nb)) queue.push(nb);
+      }
+    }
+    return sub;
+  }
+
+  /* Fins directement reliées au central, puis fins chaînées au-dessus */
+  const directEnds  = ends.filter((e) => (adj[e.id] || []).includes(centralId));
+  function collectChainedEnds(startId) {
+    const chain = [];
+    const visited = new Set([centralId, startId]);
+    const queue = [...(adj[startId] || []).filter((id) => endsSet.has(id))];
+    while (queue.length) {
+      const id = queue.shift();
+      if (visited.has(id) || !endsSet.has(id)) continue;
+      visited.add(id);
+      chain.push(nodeById[id]);
+      for (const nb of (adj[id] || [])) {
+        if (!visited.has(nb) && endsSet.has(nb)) queue.push(nb);
+      }
+    }
+    return chain;
+  }
+
+  // Chaîne ends commune : directEnds → higherEnds
+  const endChainContents = [
+    ...directEnds.map((e) => e.content),
+    ...directEnds.flatMap((e) => collectChainedEnds(e.id).map((x) => x.content)),
+  ].filter((v, i, arr) => arr.indexOf(v) === i); // dédoublonnage
+
+  /* Construit une chaîne par moyen passerelle */
+  const chains = gatewayMeans.map((gm) => {
+    const subMeans   = collectSubMeans(gm.id);
+    const allMeansIds = [gm.id, ...subMeans.map((m) => m.id)];
+    // Texte : sous-moyens (feuilles d'abord) → passerelle → central → fins
+    const pathParts  = [
+      ...subMeans.map((m) => m.content),
+      gm.content,
+      central.content,
+      ...endChainContents,
+    ];
+    return { meansIds: allMeansIds, path: pathParts.join(" → ") };
+  });
+
+  // Moyens non reliés au central (orphelins) → groupe séparé
+  const coveredMeansIds = new Set(chains.flatMap((c) => c.meansIds));
+  const orphans = means.filter((m) => !coveredMeansIds.has(m.id));
+  if (orphans.length > 0) {
+    chains.push({
+      meansIds: orphans.map((m) => m.id),
+      path: orphans.map((m) => m.content).join(" / ") + ` → ${central.content}`,
+    });
+  }
+
+  // Connexions entre moyens (contexte de sous-structure)
+  const meansById = Object.fromEntries(means.map((m) => [m.id, m]));
+  const meansConnections = (connections || [])
     .filter((c) => meansSet.has(c.fromId) && meansSet.has(c.toId))
     .map((c) => ({
       from: meansById[c.fromId]?.content ?? c.fromId,
@@ -134,11 +222,12 @@ export function buildChainsForAI(nodes, connections) {
     }));
 
   return {
-    central:          { id: central?.id, content: central?.content },
+    central:          { id: centralId, content: central.content },
     means:            means.map((m) => ({ id: m.id, content: m.content })),
     ends:             ends.map((e)  => ({ id: e.id, content: e.content })),
+    chains,
     meansConnections,
-    centralId:        central?.id ?? null,
+    centralId,
     endIds:           ends.map((e) => e.id),
   };
 }
