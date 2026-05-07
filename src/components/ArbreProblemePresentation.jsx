@@ -281,97 +281,97 @@ const ArbreProblemePresentation = ({
       key: "methodo",
       title: "De l'analyse au plan d'action",
       content: (
-        <div className="space-y-5">
+        <div className="space-y-3">
 
           {/* ── Pipeline 4 étapes ── */}
           <div className="relative">
-            {/* Ligne de connexion (desktop uniquement) */}
+            {/* Ligne de connexion (desktop) — centrée sur les cercles w-8 = 16px */}
             <div
-              className="hidden md:block absolute top-5 h-px z-0"
-              style={{ left: "calc(12.5% + 20px)", right: "calc(12.5% + 20px)", background: "linear-gradient(to right, #f9a8d4, #a78bfa, #818cf8, #6ee7b7)" }}
+              className="hidden md:block absolute h-px z-0"
+              style={{ top: "16px", left: "calc(12.5% + 16px)", right: "calc(12.5% + 16px)", background: "linear-gradient(to right, #f9a8d4, #a78bfa, #818cf8, #6ee7b7)" }}
             />
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 relative z-10">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 relative z-10">
               {[
-                { n: 1, icon: "🔍", bg: "bg-pink-500",    ring: "ring-pink-100",    light: "bg-pink-50 border-pink-100",    text: "text-pink-800",    title: "Identifier",  desc: "Lister causes, problèmes et conséquences avec le groupe" },
+                { n: 1, icon: "🔍", bg: "bg-pink-500",    ring: "ring-pink-100",    light: "bg-pink-50 border-pink-100",    text: "text-pink-800",    title: "Identifier",  desc: "Lister causes, problèmes et conséquences" },
                 { n: 2, icon: "🔗", bg: "bg-violet-500",  ring: "ring-violet-100",  light: "bg-violet-50 border-violet-100",text: "text-violet-800",  title: "Connecter",   desc: "Tracer les liens causaux de bas en haut" },
-                { n: 3, icon: "✦",  bg: "bg-indigo-500",  ring: "ring-indigo-100",  light: "bg-indigo-50 border-indigo-100",text: "text-indigo-800",  title: "Transformer", desc: "Chaque problème devient un objectif positif" },
-                { n: 4, icon: "🎯", bg: "bg-emerald-500", ring: "ring-emerald-100", light: "bg-emerald-50 border-emerald-100",text: "text-emerald-800",title: "Planifier",   desc: "Construire les stratégies d'intervention GAR" },
+                { n: 3, icon: "✦",  bg: "bg-indigo-500",  ring: "ring-indigo-100",  light: "bg-indigo-50 border-indigo-100",text: "text-indigo-800",  title: "Transformer", desc: "Chaque problème → objectif positif" },
+                { n: 4, icon: "🎯", bg: "bg-emerald-500", ring: "ring-emerald-100", light: "bg-emerald-50 border-emerald-100",text: "text-emerald-800",title: "Planifier",   desc: "Construire les stratégies GAR" },
               ].map((s) => (
-                <div key={s.n} className={`flex flex-col items-center gap-2 p-3.5 rounded-2xl border ${s.light} text-center`}>
-                  <div className={`w-10 h-10 rounded-full ${s.bg} text-white text-sm font-black flex items-center justify-center ring-4 ${s.ring} shadow-sm`}>
+                <div key={s.n} className={`flex flex-col items-center gap-1.5 p-2.5 rounded-xl border ${s.light} text-center`}>
+                  <div className={`w-8 h-8 rounded-full ${s.bg} text-white text-xs font-black flex items-center justify-center ring-2 ${s.ring} shadow-sm`}>
                     {s.n}
                   </div>
-                  <span className="text-base leading-none">{s.icon}</span>
-                  <p className={`text-xs font-bold ${s.text}`}>{s.title}</p>
-                  <p className="text-[10px] text-gray-500 leading-relaxed">{s.desc}</p>
+                  <span className="text-sm leading-none">{s.icon}</span>
+                  <p className={`text-[11px] font-bold ${s.text} leading-tight`}>{s.title}</p>
+                  <p className="text-[10px] text-gray-500 leading-snug">{s.desc}</p>
                 </div>
               ))}
             </div>
           </div>
 
           {/* ── Comparaison avant / après ── */}
-          <div className="flex flex-col md:flex-row gap-3 items-stretch">
+          <div className="flex flex-col md:flex-row gap-2 items-start">
 
             {/* Arbre à Problèmes */}
-            <div className="flex-1 space-y-2">
-              <div className="flex items-center gap-2">
-                <div className="w-5 h-5 rounded-full bg-red-500 text-white text-[9px] font-black flex items-center justify-center shrink-0">P</div>
-                <p className="text-xs font-bold text-gray-600 uppercase tracking-wider">Arbre à Problèmes</p>
-                <span className="ml-auto text-[10px] text-gray-400 italic font-medium">Diagnostic</span>
+            <div className="flex-1 space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <div className="w-4 h-4 rounded-full bg-red-500 text-white text-[8px] font-black flex items-center justify-center shrink-0">P</div>
+                <p className="text-[11px] font-bold text-gray-600 uppercase tracking-wider">Arbre à Problèmes</p>
+                <span className="ml-auto text-[10px] text-gray-400 italic">Diagnostic</span>
               </div>
-              <div className="rounded-xl overflow-hidden border-2 border-red-100 shadow-lg ring-1 ring-red-50">
+              <div className="rounded-lg overflow-hidden border-2 border-red-100 shadow-md" style={{ maxHeight: "130px" }}>
                 <SmartImage
                   sources={IMG_PROBLEME_SOURCES}
                   alt="Arbre à problèmes"
-                  className="w-full h-auto"
+                  className="w-full h-full object-cover object-top"
                 />
               </div>
             </div>
 
-            {/* Flèche de transformation */}
-            <div className="hidden md:flex flex-col items-center justify-center gap-2 px-2 shrink-0">
-              <div className="w-11 h-11 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-200">
-                <span className="text-white font-black text-base">⇔</span>
+            {/* Flèche de transformation (desktop) */}
+            <div className="hidden md:flex flex-col items-center justify-center gap-1.5 px-1.5 shrink-0 pt-6">
+              <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-200/60">
+                <span className="text-white font-black text-sm">⇔</span>
               </div>
-              <p className="text-[9px] font-semibold text-gray-400 uppercase tracking-widest text-center leading-tight">
+              <p className="text-[9px] font-semibold text-gray-400 uppercase tracking-widest text-center">
                 Trans&shy;former
               </p>
             </div>
 
             {/* Séparateur mobile */}
-            <div className="md:hidden flex items-center gap-3">
+            <div className="md:hidden flex items-center gap-2">
               <div className="flex-1 h-px bg-gray-200" />
-              <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-100 text-indigo-600 text-[10px] font-bold">
+              <div className="flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-indigo-100 text-indigo-600 text-[10px] font-bold">
                 <span>⇔</span> Transformer
               </div>
               <div className="flex-1 h-px bg-gray-200" />
             </div>
 
             {/* Arbre à Objectifs */}
-            <div className="flex-1 space-y-2">
-              <div className="flex items-center gap-2">
-                <div className="w-5 h-5 rounded-full bg-emerald-500 text-white text-[9px] font-black flex items-center justify-center shrink-0">O</div>
-                <p className="text-xs font-bold text-gray-600 uppercase tracking-wider">Arbre à Objectifs</p>
-                <span className="ml-auto text-[10px] text-gray-400 italic font-medium">Projection</span>
+            <div className="flex-1 space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <div className="w-4 h-4 rounded-full bg-emerald-500 text-white text-[8px] font-black flex items-center justify-center shrink-0">O</div>
+                <p className="text-[11px] font-bold text-gray-600 uppercase tracking-wider">Arbre à Objectifs</p>
+                <span className="ml-auto text-[10px] text-gray-400 italic">Projection</span>
               </div>
-              <div className="rounded-xl overflow-hidden border-2 border-emerald-100 shadow-lg ring-1 ring-emerald-50">
+              <div className="rounded-lg overflow-hidden border-2 border-emerald-100 shadow-md" style={{ maxHeight: "130px" }}>
                 <SmartImage
                   sources={IMG_OBJECTIFS_SOURCES}
                   alt="Exemple d'arbre à objectifs"
-                  className="w-full h-auto"
+                  className="w-full h-full object-cover object-top"
                 />
               </div>
             </div>
           </div>
 
           {/* ── Principe GAR ── */}
-          <div className="flex items-center gap-4 p-4 rounded-xl bg-gradient-to-r from-slate-800 to-slate-900 shadow-xl">
-            <div className="w-9 h-9 rounded-xl bg-white/10 flex items-center justify-center shrink-0 border border-white/15">
-              <span className="text-white font-black text-base leading-none">⇔</span>
+          <div className="flex items-center gap-3 p-3 rounded-xl bg-gradient-to-r from-slate-800 to-slate-900 shadow-lg">
+            <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center shrink-0 border border-white/15">
+              <span className="text-white font-black text-sm leading-none">⇔</span>
             </div>
             <div>
-              <p className="text-sm font-bold text-white">Principe de transformation GAR</p>
-              <p className="text-xs text-slate-300 leading-relaxed mt-0.5">
+              <p className="text-xs font-bold text-white">Principe de transformation GAR</p>
+              <p className="text-[11px] text-slate-300 leading-relaxed mt-0.5">
                 Chaque état négatif se réécrit en{" "}
                 <span className="font-semibold text-white">objectif positif, réaliste et mesurable</span>
                 {" "}— fondement du cadre logique d'intervention.
