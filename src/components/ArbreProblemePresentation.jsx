@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Play, X, QrCode, Sparkles, ArrowRight, ExternalLink } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronDown, Play, X, QrCode, Sparkles, ArrowRight, ExternalLink } from "lucide-react";
 import QRCodeGenerator from "./QRCodeGenerator";
 import WorkshopContextCard, { AIConfigPanel } from "./WorkshopContextCard";
 import { buildWorkshopContext } from "../lib/documentParser";
@@ -148,107 +148,233 @@ const ArbreProblemePresentation = ({
     },
     {
       key: "structure",
-      title: "Structure de l'Arbre à Problèmes",
+      title: "Anatomie de l'Arbre à Problèmes",
       content: (
         <div className="space-y-5">
-          {/* Visual layer labels */}
-          <div className="flex items-center justify-center gap-2 flex-wrap">
-            <span className="px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-700 border border-amber-200">
-              ↑ Conséquences
-            </span>
-            <span className="text-gray-300 font-bold text-lg">·</span>
-            <span className="px-3 py-1 rounded-full text-xs font-bold bg-red-100 text-red-700 border border-red-200">
-              ● Problème central
-            </span>
-            <span className="text-gray-300 font-bold text-lg">·</span>
-            <span className="px-3 py-1 rounded-full text-xs font-bold bg-pink-100 text-pink-700 border border-pink-200">
-              ↓ Causes
-            </span>
+          <div className="grid lg:grid-cols-5 gap-5 items-start">
+
+            {/* ── Gauche : diagramme anatomique (2/5) ── */}
+            <div className="lg:col-span-2 flex flex-col gap-1.5">
+
+              {/* Conséquences */}
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 shadow-lg shadow-amber-200/50">
+                <div className="flex items-center gap-2.5 mb-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center shrink-0 backdrop-blur-sm">
+                    <span className="text-white font-black text-base leading-none">▲</span>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black text-white/70 uppercase tracking-widest leading-none">Conséquences</p>
+                    <p className="text-sm font-bold text-white leading-tight mt-0.5">Effets négatifs</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {["Impact économique", "Exclusion sociale"].map((t) => (
+                    <span key={t} className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/25 text-white border border-white/25">
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Connecteur ↓ */}
+              <div className="flex justify-center">
+                <div className="flex flex-col items-center gap-0">
+                  <div className="w-0.5 h-2 bg-gradient-to-b from-orange-400 to-red-500"/>
+                  <ChevronDown className="w-4 h-4 text-red-400 -mt-1" />
+                </div>
+              </div>
+
+              {/* Problème central */}
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-red-600 to-rose-700 shadow-xl shadow-red-200/60 ring-2 ring-offset-1 ring-red-400/40">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center shrink-0 ring-1 ring-white/25">
+                    <span className="text-white font-black text-lg leading-none">●</span>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black text-red-200 uppercase tracking-widest leading-none">Problème Central</p>
+                    <p className="text-sm font-bold text-white leading-tight mt-0.5">Le tronc — nœud focal</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Connecteur ↓ */}
+              <div className="flex justify-center">
+                <div className="flex flex-col items-center gap-0">
+                  <ChevronDown className="w-4 h-4 text-pink-400 -mb-1" />
+                  <div className="w-0.5 h-2 bg-gradient-to-b from-red-500 to-pink-500"/>
+                </div>
+              </div>
+
+              {/* Causes */}
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-pink-500 to-rose-600 shadow-lg shadow-pink-200/50">
+                <div className="flex items-center gap-2.5 mb-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center shrink-0 backdrop-blur-sm">
+                    <span className="text-white font-black text-base leading-none">▼</span>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black text-white/70 uppercase tracking-widest leading-none">Causes</p>
+                    <p className="text-sm font-bold text-white leading-tight mt-0.5">Facteurs racines</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {["Cause directe", "Cause profonde"].map((t) => (
+                    <span key={t} className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/25 text-white border border-white/25">
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <p className="text-center text-[10px] text-gray-400 font-medium uppercase tracking-widest pt-1">
+                Lecture : racines → tronc → branches
+              </p>
+            </div>
+
+            {/* ── Droite : image dans chrome navigateur (3/5) ── */}
+            <div className="lg:col-span-3">
+              <div className="rounded-2xl overflow-hidden shadow-2xl border border-gray-200 bg-gray-50">
+                <div className="bg-slate-800 px-4 py-2.5 flex items-center gap-2.5">
+                  <div className="flex gap-1.5">
+                    <div className="w-2.5 h-2.5 rounded-full bg-red-400/80" />
+                    <div className="w-2.5 h-2.5 rounded-full bg-amber-400/80" />
+                    <div className="w-2.5 h-2.5 rounded-full bg-emerald-400/80" />
+                  </div>
+                  <span className="flex-1 text-xs text-slate-400 font-medium tracking-tight">Exemple réel · Arbre à Problèmes</span>
+                  <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-semibold border border-indigo-500/20">
+                    Cas pratique
+                  </span>
+                </div>
+                <SmartImage
+                  sources={IMG_PROBLEME_SOURCES}
+                  alt="Schéma de structure de l'Arbre à Problèmes"
+                  className="w-full h-auto"
+                />
+              </div>
+            </div>
           </div>
 
-          {/* Image */}
-          <div className="rounded-2xl overflow-hidden border border-gray-100 bg-white shadow-md ring-1 ring-gray-50">
-            <SmartImage
-              sources={IMG_PROBLEME_SOURCES}
-              alt="Schéma de structure de l'Arbre à Problèmes"
-              className="w-full h-auto"
-            />
-          </div>
-
-          {/* Caption */}
-          <div className="flex items-start gap-3 p-4 rounded-xl bg-slate-50 border border-slate-100">
-            <span className="text-2xl leading-none shrink-0">💡</span>
-            <p className="text-sm text-gray-700 leading-relaxed">
-              Chaque cause et conséquence peut avoir des{" "}
-              <span className="font-semibold text-indigo-700">sous-niveaux</span> pour une analyse progressive et hiérarchisée.
-              La profondeur de l&#39;arbre reflète la complexité du problème.
-            </p>
+          {/* ── Insights ── */}
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="flex gap-3 p-3.5 rounded-xl bg-slate-50 border border-slate-100 hover:border-indigo-100 hover:bg-indigo-50/20 transition-colors group">
+              <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center shrink-0 group-hover:bg-indigo-100 transition-colors">
+                <span className="text-sm">🔗</span>
+              </div>
+              <p className="text-xs text-gray-600 leading-relaxed">
+                <span className="font-bold text-gray-800">Liens causaux documentés</span>{" "}
+                — chaque connexion traduit une relation cause-effet validée collectivement par le groupe.
+              </p>
+            </div>
+            <div className="flex gap-3 p-3.5 rounded-xl bg-slate-50 border border-slate-100 hover:border-emerald-100 hover:bg-emerald-50/20 transition-colors group">
+              <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-100 flex items-center justify-center shrink-0 group-hover:bg-emerald-100 transition-colors">
+                <span className="text-sm">🔬</span>
+              </div>
+              <p className="text-xs text-gray-600 leading-relaxed">
+                <span className="font-bold text-gray-800">Profondeur illimitée</span>{" "}
+                — chaque cause peut avoir des sous-causes pour atteindre les facteurs racines fondamentaux.
+              </p>
+            </div>
           </div>
         </div>
       ),
     },
     {
       key: "methodo",
-      title: "Méthodologie d'analyse & projection en objectifs",
+      title: "De l'analyse au plan d'action",
       content: (
-        <div className="grid lg:grid-cols-2 gap-5">
-          {/* Colonne gauche : Explorer les causes */}
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 mb-1">
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-pink-500 to-rose-600 flex items-center justify-center shadow-sm">
-                <span className="text-sm leading-none">🔍</span>
+        <div className="space-y-5">
+
+          {/* ── Pipeline 4 étapes ── */}
+          <div className="relative">
+            {/* Ligne de connexion (desktop uniquement) */}
+            <div
+              className="hidden md:block absolute top-5 h-px z-0"
+              style={{ left: "calc(12.5% + 20px)", right: "calc(12.5% + 20px)", background: "linear-gradient(to right, #f9a8d4, #a78bfa, #818cf8, #6ee7b7)" }}
+            />
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 relative z-10">
+              {[
+                { n: 1, icon: "🔍", bg: "bg-pink-500",    ring: "ring-pink-100",    light: "bg-pink-50 border-pink-100",    text: "text-pink-800",    title: "Identifier",  desc: "Lister causes, problèmes et conséquences avec le groupe" },
+                { n: 2, icon: "🔗", bg: "bg-violet-500",  ring: "ring-violet-100",  light: "bg-violet-50 border-violet-100",text: "text-violet-800",  title: "Connecter",   desc: "Tracer les liens causaux de bas en haut" },
+                { n: 3, icon: "✦",  bg: "bg-indigo-500",  ring: "ring-indigo-100",  light: "bg-indigo-50 border-indigo-100",text: "text-indigo-800",  title: "Transformer", desc: "Chaque problème devient un objectif positif" },
+                { n: 4, icon: "🎯", bg: "bg-emerald-500", ring: "ring-emerald-100", light: "bg-emerald-50 border-emerald-100",text: "text-emerald-800",title: "Planifier",   desc: "Construire les stratégies d'intervention GAR" },
+              ].map((s) => (
+                <div key={s.n} className={`flex flex-col items-center gap-2 p-3.5 rounded-2xl border ${s.light} text-center`}>
+                  <div className={`w-10 h-10 rounded-full ${s.bg} text-white text-sm font-black flex items-center justify-center ring-4 ${s.ring} shadow-sm`}>
+                    {s.n}
+                  </div>
+                  <span className="text-base leading-none">{s.icon}</span>
+                  <p className={`text-xs font-bold ${s.text}`}>{s.title}</p>
+                  <p className="text-[10px] text-gray-500 leading-relaxed">{s.desc}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* ── Comparaison avant / après ── */}
+          <div className="flex flex-col md:flex-row gap-3 items-stretch">
+
+            {/* Arbre à Problèmes */}
+            <div className="flex-1 space-y-2">
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 rounded-full bg-red-500 text-white text-[9px] font-black flex items-center justify-center shrink-0">P</div>
+                <p className="text-xs font-bold text-gray-600 uppercase tracking-wider">Arbre à Problèmes</p>
+                <span className="ml-auto text-[10px] text-gray-400 italic font-medium">Diagnostic</span>
               </div>
-              <h4 className="text-lg font-bold text-gray-900">Explorer les causes</h4>
+              <div className="rounded-xl overflow-hidden border-2 border-red-100 shadow-lg ring-1 ring-red-50">
+                <SmartImage
+                  sources={IMG_PROBLEME_SOURCES}
+                  alt="Arbre à problèmes"
+                  className="w-full h-auto"
+                />
+              </div>
             </div>
 
-            <div className="space-y-3">
-              <div className="flex gap-3 p-3.5 rounded-xl bg-pink-50 border border-pink-100">
-                <span className="w-6 h-6 rounded-full bg-pink-500 text-white text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
-                <div>
-                  <p className="text-sm font-bold text-gray-800">Partir du bas</p>
-                  <p className="text-xs text-gray-600 mt-0.5">Identifiez les causes racines avec le groupe.</p>
-                </div>
+            {/* Flèche de transformation */}
+            <div className="hidden md:flex flex-col items-center justify-center gap-2 px-2 shrink-0">
+              <div className="w-11 h-11 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-200">
+                <span className="text-white font-black text-base">⇔</span>
               </div>
-              <div className="flex gap-3 p-3.5 rounded-xl bg-pink-50 border border-pink-100">
-                <span className="w-6 h-6 rounded-full bg-pink-500 text-white text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
-                <div>
-                  <p className="text-sm font-bold text-gray-800">Valider collectivement</p>
-                  <p className="text-xs text-gray-600 mt-0.5">Confirmez chaque cause par le débat et les évidence.</p>
-                </div>
+              <p className="text-[9px] font-semibold text-gray-400 uppercase tracking-widest text-center leading-tight">
+                Trans&shy;former
+              </p>
+            </div>
+
+            {/* Séparateur mobile */}
+            <div className="md:hidden flex items-center gap-3">
+              <div className="flex-1 h-px bg-gray-200" />
+              <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-100 text-indigo-600 text-[10px] font-bold">
+                <span>⇔</span> Transformer
               </div>
-              <div className="flex gap-3 p-3.5 rounded-xl bg-pink-50 border border-pink-100">
-                <span className="w-6 h-6 rounded-full bg-pink-500 text-white text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
-                <div>
-                  <p className="text-sm font-bold text-gray-800">Remonter vers le tronc</p>
-                  <p className="text-xs text-gray-600 mt-0.5">Connectez les éléments pour révéler la logique causale.</p>
-                </div>
+              <div className="flex-1 h-px bg-gray-200" />
+            </div>
+
+            {/* Arbre à Objectifs */}
+            <div className="flex-1 space-y-2">
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 rounded-full bg-emerald-500 text-white text-[9px] font-black flex items-center justify-center shrink-0">O</div>
+                <p className="text-xs font-bold text-gray-600 uppercase tracking-wider">Arbre à Objectifs</p>
+                <span className="ml-auto text-[10px] text-gray-400 italic font-medium">Projection</span>
+              </div>
+              <div className="rounded-xl overflow-hidden border-2 border-emerald-100 shadow-lg ring-1 ring-emerald-50">
+                <SmartImage
+                  sources={IMG_OBJECTIFS_SOURCES}
+                  alt="Exemple d'arbre à objectifs"
+                  className="w-full h-auto"
+                />
               </div>
             </div>
           </div>
 
-          {/* Colonne droite : Transformer en objectifs */}
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 mb-1">
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-sm">
-                <span className="text-sm leading-none">🎯</span>
-              </div>
-              <h4 className="text-lg font-bold text-gray-900">Transformer en objectifs</h4>
+          {/* ── Principe GAR ── */}
+          <div className="flex items-center gap-4 p-4 rounded-xl bg-gradient-to-r from-slate-800 to-slate-900 shadow-xl">
+            <div className="w-9 h-9 rounded-xl bg-white/10 flex items-center justify-center shrink-0 border border-white/15">
+              <span className="text-white font-black text-base leading-none">⇔</span>
             </div>
-
-            <div className="rounded-xl overflow-hidden border border-gray-100 shadow-sm bg-white">
-              <SmartImage
-                sources={IMG_OBJECTIFS_SOURCES}
-                alt="Exemple d'arbre à objectifs"
-                className="w-full h-auto"
-              />
-            </div>
-
-            <div className="flex gap-3 p-3.5 rounded-xl bg-emerald-50 border border-emerald-100">
-              <span className="text-lg leading-none shrink-0">⇔</span>
-              <p className="text-sm text-gray-700 leading-relaxed">
-                Chaque problème se reformule en{" "}
-                <span className="font-semibold text-emerald-700">objectif positif, réaliste et mesurable</span> :
-                la base de l&#39;arbre à objectifs.
+            <div>
+              <p className="text-sm font-bold text-white">Principe de transformation GAR</p>
+              <p className="text-xs text-slate-300 leading-relaxed mt-0.5">
+                Chaque état négatif se réécrit en{" "}
+                <span className="font-semibold text-white">objectif positif, réaliste et mesurable</span>
+                {" "}— fondement du cadre logique d'intervention.
               </p>
             </div>
           </div>
