@@ -362,11 +362,15 @@ export default function App() {
           if (Array.isArray(data.strategies)) {
             setStrategies(data.strategies);
           }
-          if (mode !== "participant" && !(data.projectName || data.theme)) {
+          // Écran de démarrage uniquement pour une nouvelle session sans contexte,
+          // jamais quand on est en mode analyse (onglet séparé ou retour depuis analyse)
+          const isAnalysisMode = new URLSearchParams(window.location.search).get("analysis") === "1";
+          if (mode !== "participant" && !isAnalysisMode && !(data.projectName || data.theme)) {
             setShowPresentation(true);
           }
         } else {
-          if (mode !== "participant") setShowPresentation(true);
+          const isAnalysisMode = new URLSearchParams(window.location.search).get("analysis") === "1";
+          if (mode !== "participant" && !isAnalysisMode) setShowPresentation(true);
         }
       })
       .catch(() => {});
@@ -1610,7 +1614,10 @@ export default function App() {
       const url = new URL(window.location.href);
       url.searchParams.delete("analysis");
       url.searchParams.delete("mode");
-      window.location.replace(url.toString());
+      window.history.replaceState({}, "", url.toString());
+      // Ne pas recharger : évite que getDoc re-déclenche l'écran de démarrage
+      setShowPresentation(false);
+      setStandaloneAnalysis(false);
     };
 
     return (
