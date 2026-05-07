@@ -313,23 +313,20 @@ const ArbreProblemePresentation = ({
                 <p className="text-[11px] font-bold text-gray-600 uppercase tracking-wider">Arbre à Problèmes</p>
                 <span className="ml-auto text-[10px] text-gray-400 italic">Diagnostic</span>
               </div>
-              <div className="rounded-lg overflow-hidden border-2 border-red-100 shadow-md" style={{ maxHeight: "190px" }}>
+              <div className="rounded-lg overflow-hidden border-2 border-red-100 shadow-md">
                 <SmartImage
                   sources={IMG_PROBLEME_SOURCES}
                   alt="Arbre à problèmes"
-                  className="w-full h-full object-cover object-top"
+                  className="w-full h-auto"
                 />
               </div>
             </div>
 
             {/* Flèche de transformation (desktop) */}
-            <div className="hidden md:flex flex-col items-center justify-center gap-1.5 px-1.5 shrink-0 pt-6">
-              <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-200/60">
+            <div className="hidden md:flex flex-col items-center justify-center gap-1.5 px-1.5 shrink-0">
+              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-md shadow-indigo-200/60">
                 <span className="text-white font-black text-sm">⇔</span>
               </div>
-              <p className="text-[9px] font-semibold text-gray-400 uppercase tracking-widest text-center">
-                Trans&shy;former
-              </p>
             </div>
 
             {/* Séparateur mobile */}
@@ -348,11 +345,11 @@ const ArbreProblemePresentation = ({
                 <p className="text-[11px] font-bold text-gray-600 uppercase tracking-wider">Arbre à Objectifs</p>
                 <span className="ml-auto text-[10px] text-gray-400 italic">Projection</span>
               </div>
-              <div className="rounded-lg overflow-hidden border-2 border-emerald-100 shadow-md" style={{ maxHeight: "190px" }}>
+              <div className="rounded-lg overflow-hidden border-2 border-emerald-100 shadow-md">
                 <SmartImage
                   sources={IMG_OBJECTIFS_SOURCES}
                   alt="Exemple d'arbre à objectifs"
-                  className="w-full h-full object-cover object-top"
+                  className="w-full h-auto"
                 />
               </div>
             </div>
@@ -585,10 +582,11 @@ const ArbreProblemePresentation = ({
 
             {/* Corps du slide */}
             <div className={[
-              "min-h-[380px]",
               slides[currentSlide].key === "session"
                 ? "max-h-[62vh] overflow-y-auto pr-1 scrollbar-thin"
-                : "md:min-h-[480px]",
+                : slides[currentSlide].key === "methodo"
+                  ? ""
+                  : "min-h-[380px] md:min-h-[480px]",
             ].join(" ")}>
               {slides[currentSlide].content}
             </div>
