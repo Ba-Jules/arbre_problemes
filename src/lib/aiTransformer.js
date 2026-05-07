@@ -264,15 +264,18 @@ export async function detectStrategiesWithAI(chainsData, config, onDebug) {
     meansConnections.slice(0, 20).forEach((c) => lines.push(`  "${c.from}" ↔ "${c.to}"`));
   }
 
+  const maxStrat = Math.min(3, Math.max(1, means.length));
+  const minStrat = means.length <= 2 ? 1 : 2;
   lines.push(
     ``,
-    `INSTRUCTION : Regroupe ces ${means.length} moyen(s) en 2 à 3 stratégies cohérentes`,
-    `selon leur logique d'intervention (domaine, niveau d'action, synergie).`,
-    `Chaque moyen doit appartenir à exactement une stratégie.`,
+    `INSTRUCTION : Regroupe ces ${means.length} moyen(s) en ${minStrat} à ${maxStrat} stratégies`,
+    `d'intervention thématiquement homogènes (1 logique = 1 stratégie : ex. RH, outils, organisation).`,
+    `Chaque moyen appartient à exactement une stratégie.`,
+    `Supprime une stratégie si elle n'est pas clairement distincte des autres.`,
     `Utilise les IDs exacts entre crochets — ne les modifie pas.`,
     ``,
     `Réponds UNIQUEMENT avec ce JSON valide (en français), rien d'autre :`,
-    `[{"name": "Nom 3-5 mots", "nodeIds": ["id_exact_1", "id_exact_2"], "rationale": "1 phrase sur la logique stratégique"}]`
+    `[{"name": "Nom 3-5 mots", "nodeIds": ["id_exact_1", "id_exact_2"], "rationale": "1 phrase sur la logique thématique commune"}]`
   );
 
   const messages = [
@@ -508,4 +511,101 @@ export async function analyzeWithAI(analyticsData, config, onDebug) {
 
   onDebug?.({ type: "raw", rawText });
   return rawText;
+}
+
+/* ─── Construction du Cadre Logique par l'IA ─────────────────────────────── */
+
+const LOGFRAME_SYSTEM = `Tu es un expert senior en planification stratégique et en Cadre Logique (méthode GAR).
+Tu analyses des chaînes causales validées et construis des cadres logiques d'intervention cohérents.
+
+Règles absolues :
+- Regroupe les chaînes en stratégies à logique thématique homogène (ex : RH, organisation, communication)
+- RECONSTRUIRE les niveaux — ne pas recopier les chaînes verbatim
+- Généraliser légèrement sans inventer de concepts absents des données
+- L'objectif global commence OBLIGATOIREMENT par "Contribuer à..."
+- Les résultats sont des états concrets observables et mesurables (jamais des activités)
+- Les activités sont actionnables : verbe d'action spécifique + complément précis
+  (interdit : "améliorer", "renforcer", "développer" seuls — toujours suivis d'un objet précis)
+- Cohérence ascendante obligatoire : Activités → Résultats → Objectif Spécifique → Objectif Global
+- Si une stratégie n'est pas clairement différenciée des autres, la supprimer
+- 2 à 4 résultats par stratégie, 2 à 5 activités par stratégie
+
+Réponds UNIQUEMENT avec un tableau JSON valide, rien d'autre.`;
+
+/**
+ * Construit le cadre logique complet (4 niveaux) à partir des chaînes d'intervention.
+ * @param {{ central, chains }} chainsData — résultat de buildChainsForAI
+ * @param {{ provider, apiKey, model }} config
+ * @param {function?} onDebug
+ * @returns {Promise<Array<{name, theme, logical_framework, based_on_chains}>>}
+ */
+export async function buildLogicalFrameworkWithAI(chainsData, config, onDebug) {
+  if (!config?.provider || !config?.apiKey) throw new Error("IA non configurée");
+  if (!chainsData?.central?.content || !chainsData?.chains?.length) {
+    throw new Error("Arbre incomplet : objectif central ou chaînes manquantes");
+  }
+
+  const { central, chains } = chainsData;
+  const maxStrat = Math.min(3, Math.max(1, chains.length));
+  const minStrat = chains.length <= 1 ? 1 : 2;
+
+  const chainLines = chains.map((c, i) => {
+    const arr = c.pathArray || c.path.split(" → ");
+    return `Chaîne ${i + 1} : ${JSON.stringify(arr)}`;
+  });
+
+  const userContent = [
+    `CHAÎNES CAUSALES VALIDÉES (moyen(s) → objectif central → fin(s)) :`,
+    ...chainLines,
+    ``,
+    `OBJECTIF CENTRAL : "${central.content}"`,
+    ``,
+    `TÂCHE :`,
+    `1. Regroupe ces ${chains.length} chaîne(s) en ${minStrat} à ${maxStrat} stratégies`,
+    `   d'intervention thématiquement homogènes et clairement différenciées.`,
+    `2. Pour chaque stratégie, construis un cadre logique à 4 niveaux.`,
+    ``,
+    `FORMAT DE SORTIE — JSON strict, rien d'autre :`,
+    `[`,
+    `  {`,
+    `    "name": "Nom de la stratégie (3-5 mots)",`,
+    `    "theme": "domaine thématique (ex : formation, management, financement...)",`,
+    `    "logical_framework": {`,
+    `      "global_objective": "Contribuer à... [finalité de long terme]",`,
+    `      "specific_objective": "[état final concret à l'issue du projet]",`,
+    `      "results": ["[état observable R1]", "[état observable R2]"],`,
+    `      "activities": ["[verbe + objet A1]", "[verbe + objet A2]"]`,
+    `    },`,
+    `    "based_on_chains": [["moyen", "objectif central", "fin"]]`,
+    `  }`,
+    `]`,
+  ].join("\n");
+
+  const messages = [
+    { role: "system", content: LOGFRAME_SYSTEM },
+    { role: "user",   content: userContent },
+  ];
+
+  const cfg = { ...config, maxTokens: 3000 };
+  console.log("[IA] CALLING IA FOR LOGICAL FRAMEWORK:", { provider: config.provider, chains: chains.length });
+  onDebug?.({ type: "payload", provider: config.provider, model: config.model, labelsCount: chains.length, labels: chains, messages });
+
+  let rawText;
+  try {
+    switch (config.provider) {
+      case "openai":     rawText = await callOpenAI(messages, cfg, onDebug);     break;
+      case "openrouter": rawText = await callOpenRouter(messages, cfg, onDebug); break;
+      case "google":     rawText = await callGoogle(messages, cfg, onDebug);     break;
+      case "anthropic":  rawText = await callAnthropic(messages, cfg, onDebug);  break;
+      default:           rawText = await callOpenAI(messages, cfg, onDebug);
+    }
+  } catch (err) {
+    onDebug?.({ type: "error", message: err.message });
+    throw err;
+  }
+
+  onDebug?.({ type: "raw", rawText });
+  const parsed = parseAIResponse(rawText);
+  onDebug?.({ type: "parsed", parsed });
+  return parsed;
 }

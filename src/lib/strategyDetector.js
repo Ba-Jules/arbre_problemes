@@ -199,16 +199,18 @@ export function buildChainsForAI(nodes, connections) {
       central.content,
       ...endChainContents,
     ];
-    return { meansIds: allMeansIds, path: pathParts.join(" → ") };
+    return { meansIds: allMeansIds, path: pathParts.join(" → "), pathArray: pathParts };
   });
 
   // Moyens non reliés au central (orphelins) → groupe séparé
   const coveredMeansIds = new Set(chains.flatMap((c) => c.meansIds));
   const orphans = means.filter((m) => !coveredMeansIds.has(m.id));
   if (orphans.length > 0) {
+    const orphanParts = [...orphans.map((m) => m.content), central.content, ...endChainContents];
     chains.push({
-      meansIds: orphans.map((m) => m.id),
-      path: orphans.map((m) => m.content).join(" / ") + ` → ${central.content}`,
+      meansIds:  orphans.map((m) => m.id),
+      path:      orphanParts.join(" → "),
+      pathArray: orphanParts,
     });
   }
 

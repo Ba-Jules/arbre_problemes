@@ -6,7 +6,8 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { analyzeWithAI } from "../lib/aiTransformer";
+import { analyzeWithAI, buildLogicalFrameworkWithAI } from "../lib/aiTransformer";
+import { buildChainsForAI } from "../lib/strategyDetector";
 import {
   ResponsiveContainer,
   BarChart,
@@ -51,9 +52,14 @@ export default function AnalysisPanel({
   const [tab, setTab] = useState("overview");
 
   /* ─── État analyse IA ─── */
-  const [aiAnalysis, setAiAnalysis]     = useState("");
-  const [aiAnalyzing, setAiAnalyzing]   = useState(false);
+  const [aiAnalysis, setAiAnalysis]       = useState("");
+  const [aiAnalyzing, setAiAnalyzing]     = useState(false);
   const [aiAnalysisErr, setAiAnalysisErr] = useState("");
+
+  /* ─── État cadre logique ─── */
+  const [logframe, setLogframe]           = useState(null);
+  const [logframeLoading, setLogframeLoading] = useState(false);
+  const [logframeError, setLogframeError] = useState("");
 
   /* ===================== Couleurs (alignées avec l'app) ===================== */
   const COLORS = {
@@ -589,6 +595,30 @@ export default function AnalysisPanel({
   }, [aiConfig, projectName, theme, counts, depthInfo, causeImpact, quickWins,
       nodesStats, duplicates, sampleChains, objectiveNodes, strategies]);
 
+  /* ===================== Cadre logique ===================== */
+  const handleBuildLogframe = useCallback(async () => {
+    if (!aiConfig?.configured) return;
+    setLogframeLoading(true);
+    setLogframeError("");
+    setTab("logframe");
+
+    const chainsData = buildChainsForAI(objectiveNodes, objectiveConnections);
+    if (!chainsData) {
+      setLogframeError("Arbre à objectifs incomplet : générez d'abord l'arbre à objectifs avec un objectif central et des moyens.");
+      setLogframeLoading(false);
+      return;
+    }
+
+    try {
+      const result = await buildLogicalFrameworkWithAI(chainsData, aiConfig);
+      setLogframe(result);
+    } catch (err) {
+      setLogframeError(err.message);
+    } finally {
+      setLogframeLoading(false);
+    }
+  }, [aiConfig, objectiveNodes, objectiveConnections]);
+
   /* ===================== Actions ===================== */
   const copySummary = useCallback(async () => {
     try {
@@ -638,14 +668,24 @@ export default function AnalysisPanel({
         )}
         <div className="ml-auto flex items-center gap-2 flex-wrap">
           {aiConfig?.configured ? (
-            <button
-              className="px-3 py-1 rounded bg-violet-700 text-white text-sm font-semibold disabled:opacity-60"
-              onClick={handleAIAnalysis}
-              disabled={aiAnalyzing}
-              title="Analyse experte complète par l'IA (arbre problèmes + objectifs + stratégies)"
-            >
-              {aiAnalyzing ? "Analyse en cours…" : "✦ Analyser avec l'IA"}
-            </button>
+            <>
+              <button
+                className="px-3 py-1 rounded bg-violet-700 text-white text-sm font-semibold disabled:opacity-60"
+                onClick={handleAIAnalysis}
+                disabled={aiAnalyzing}
+                title="Analyse experte complète (arbre problèmes + objectifs + stratégies)"
+              >
+                {aiAnalyzing ? "Analyse…" : "✦ Analyser avec l'IA"}
+              </button>
+              <button
+                className="px-3 py-1 rounded bg-emerald-700 text-white text-sm font-semibold disabled:opacity-60"
+                onClick={handleBuildLogframe}
+                disabled={logframeLoading}
+                title="Construire le cadre logique d'intervention par stratégie"
+              >
+                {logframeLoading ? "Construction…" : "⬡ Logique d'intervention"}
+              </button>
+            </>
           ) : (
             <span className="text-xs text-slate-400 italic">Configurez un provider IA pour l'analyse experte</span>
           )}
@@ -711,6 +751,7 @@ export default function AnalysisPanel({
           ["structure", "Structure"],
           ["reco", "Recommandations"],
           ["ai", aiAnalyzing ? "Analyse IA…" : aiAnalysis ? "Analyse IA ✓" : "Analyse IA ✦"],
+          ["logframe", logframeLoading ? "Logique…" : logframe ? "Logique ✓" : "Logique d'intervention"],
         ].map(([id, label]) => (
           <button
             key={id}
@@ -961,6 +1002,16 @@ export default function AnalysisPanel({
         />
       )}
 
+      {tab === "logframe" && (
+        <LogframeTab
+          loading={logframeLoading}
+          logframe={logframe}
+          error={logframeError}
+          configured={!!aiConfig?.configured}
+          onLaunch={handleBuildLogframe}
+        />
+      )}
+
       {tab === "reco" && (
         <>
           <Card title="Recommandations actionnables">
@@ -1098,6 +1149,190 @@ function AIAnalysisTab({ analyzing, analysis, error, configured, onLaunch, onCop
       </div>
       <MarkdownText text={analysis} />
     </Card>
+  );
+}
+
+/* ===================== Onglet Logique d'intervention ===================== */
+
+function LogframeTab({ loading, logframe, error, configured, onLaunch }) {
+  if (!configured) {
+    return (
+      <Card title="Logique d'intervention (Cadre Logique)">
+        <div className="py-8 text-center text-slate-500 text-sm">
+          <div className="text-2xl mb-3">🔑</div>
+          <p>Configurez un provider IA pour construire le cadre logique par stratégie.</p>
+          <p className="mt-1 text-xs text-slate-400">
+            L'IA construira un cadre logique complet (Finalité, But, Résultats, Activités) pour chaque chaîne d'intervention.
+          </p>
+        </div>
+      </Card>
+    );
+  }
+  if (loading) {
+    return (
+      <Card title="Logique d'intervention (Cadre Logique)">
+        <div className="py-10 text-center">
+          <div className="inline-block w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin mb-4" />
+          <p className="text-sm text-slate-600">Construction du cadre logique en cours…</p>
+          <p className="text-xs text-slate-400 mt-1">L'IA trace les chaînes moyen → objectif → finalité</p>
+        </div>
+      </Card>
+    );
+  }
+  if (error) {
+    return (
+      <Card title="Logique d'intervention (Cadre Logique)">
+        <div className="p-3 bg-red-50 border border-red-200 rounded mb-3 text-sm text-red-700">
+          ✗ Erreur : {error}
+        </div>
+        <button
+          className="px-3 py-1.5 rounded bg-emerald-700 text-white text-sm font-semibold"
+          onClick={onLaunch}
+        >Réessayer</button>
+      </Card>
+    );
+  }
+  if (!logframe || !logframe.length) {
+    return (
+      <Card title="Logique d'intervention (Cadre Logique)">
+        <div className="py-8 text-center">
+          <p className="text-sm text-slate-600 mb-4">
+            À partir de l'arbre à objectifs, l'IA va reconstruire un cadre logique GAR complet pour chaque stratégie.
+          </p>
+          <ul className="text-xs text-slate-500 text-left inline-block mb-5 space-y-1">
+            <li>🌍 <strong>Finalité</strong> — Objectif Global (contribution à long terme)</li>
+            <li>🎯 <strong>But</strong> — Objectif Spécifique (changement attendu direct)</li>
+            <li>◆ <strong>Résultats</strong> — Extrants concrets produits par la stratégie</li>
+            <li>⚙ <strong>Activités</strong> — Actions opérationnelles à mettre en œuvre</li>
+          </ul>
+          <br />
+          <button
+            className="px-4 py-2 rounded-lg bg-emerald-700 text-white font-semibold text-sm"
+            onClick={onLaunch}
+          >⬡ Construire le cadre logique</button>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-slate-800 text-sm">
+          Logique d'intervention — {logframe.length} stratégie{logframe.length > 1 ? "s" : ""}
+        </h3>
+        <button
+          className="px-3 py-1 rounded bg-emerald-100 text-emerald-800 text-xs font-semibold border border-emerald-200"
+          onClick={onLaunch}
+        >↺ Régénérer</button>
+      </div>
+      {logframe.map((s, i) => (
+        <LogframeStrategyCard key={i} strategy={s} index={i} />
+      ))}
+    </div>
+  );
+}
+
+function LogframeStrategyCard({ strategy, index }) {
+  const [chainsOpen, setChainsOpen] = useState(false);
+  const lf = strategy.logical_framework || {};
+  const results    = Array.isArray(lf.results)    ? lf.results    : [];
+  const activities = Array.isArray(lf.activities) ? lf.activities : [];
+  const chains     = Array.isArray(strategy.based_on_chains) ? strategy.based_on_chains : [];
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+      {/* En-tête stratégie */}
+      <div className="flex items-center gap-3 px-4 py-3 bg-slate-50 border-b border-slate-200">
+        <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+          Stratégie {index + 1}
+        </span>
+        <span className="font-semibold text-slate-900 text-sm">{strategy.name || "—"}</span>
+        {strategy.theme && (
+          <span className="ml-auto px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 border border-emerald-200">
+            {strategy.theme}
+          </span>
+        )}
+      </div>
+
+      <div className="p-4 space-y-3">
+        {/* Finalité */}
+        <div className="flex gap-3 p-3 rounded-lg bg-green-50 border border-green-200">
+          <span className="text-lg shrink-0">🌍</span>
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wide text-green-700 mb-0.5">Finalité — Objectif Global</div>
+            <div className="text-sm text-slate-800">{lf.global_objective || "—"}</div>
+          </div>
+        </div>
+
+        {/* But */}
+        <div className="flex gap-3 p-3 rounded-lg bg-blue-50 border border-blue-200">
+          <span className="text-lg shrink-0">🎯</span>
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wide text-blue-700 mb-0.5">But — Objectif Spécifique</div>
+            <div className="text-sm text-slate-800">{lf.specific_objective || "—"}</div>
+          </div>
+        </div>
+
+        {/* Résultats */}
+        {results.length > 0 && (
+          <div className="flex gap-3 p-3 rounded-lg bg-violet-50 border border-violet-200">
+            <span className="text-lg shrink-0">◆</span>
+            <div className="flex-1">
+              <div className="text-xs font-bold uppercase tracking-wide text-violet-700 mb-1.5">Résultats attendus</div>
+              <ul className="space-y-1">
+                {results.map((r, i) => (
+                  <li key={i} className="flex gap-2 text-sm text-slate-800">
+                    <span className="shrink-0 font-semibold text-violet-500">R{i + 1}.</span>
+                    <span>{r}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
+
+        {/* Activités */}
+        {activities.length > 0 && (
+          <div className="flex gap-3 p-3 rounded-lg bg-slate-50 border border-slate-200">
+            <span className="text-lg shrink-0">⚙</span>
+            <div className="flex-1">
+              <div className="text-xs font-bold uppercase tracking-wide text-slate-600 mb-1.5">Activités</div>
+              <ul className="space-y-1">
+                {activities.map((a, i) => (
+                  <li key={i} className="flex gap-2 text-sm text-slate-700">
+                    <span className="shrink-0 font-semibold text-slate-400">A{i + 1}.</span>
+                    <span>{a}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
+
+        {/* Chaînes sources (collapsible) */}
+        {chains.length > 0 && (
+          <div>
+            <button
+              className="text-xs text-slate-500 flex items-center gap-1 hover:text-slate-700"
+              onClick={() => setChainsOpen((v) => !v)}
+            >
+              <span>{chainsOpen ? "▼" : "▶"}</span>
+              Basé sur {chains.length} chaîne{chains.length > 1 ? "s" : ""} d'intervention
+            </button>
+            {chainsOpen && (
+              <div className="mt-2 space-y-1.5 pl-4 border-l-2 border-slate-200">
+                {chains.map((chain, i) => (
+                  <div key={i} className="text-xs text-slate-500">
+                    {Array.isArray(chain) ? chain.join(" → ") : String(chain)}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
