@@ -359,95 +359,129 @@ export default function AnalysisPanel({
     return chains.slice(0, 6).map((ids) => ids.map((id) => byId[id]?.content || "(?)"));
   }, [postIts, inMap, outMap, byId]);
 
-  /* ===================== Résumé exécutif & synthèse ===================== */
+  /* ===================== Résumé exécutif analytique ===================== */
   const executiveSummary = useMemo(() => {
-    const lines = [];
+    const insights = [];
+    if (!counts.inTree) return insights;
 
-    // 1) Densité et structuration
-    lines.push(
-      `Ensemble de ${counts.total} étiquettes (${counts.inTree} dans l'arbre, ` +
-      `${counts.offTree} hors arbre) pour ${counts.links} liaisons.`
-    );
+    // 1. Densité & structuration
+    const density = counts.links / Math.max(1, counts.inTree);
+    const densityLabel = density < 0.8 ? "faible" : density < 1.5 ? "correcte" : "élevée";
+    const densityMsg = density < 0.8
+      ? `Plusieurs nœuds flottent sans ancrage causal — risque de dispersion de l’intervention et de manque de cohérence entre causes.`
+      : density > 1.5
+      ? `Arbre très interconnecté — vérifier que chaque lien est causal et non simplement associatif, pour éviter des logiques circulaires.`
+      : `La structuration est solide. Les nœuds sont bien reliés sans sur-connexion.`;
+    insights.push({
+      level: density < 0.8 ? "warn" : density > 1.8 ? "warn" : "ok",
+      title: "Structuration du graphe",
+      text: `${counts.inTree} nœuds, ${counts.links} liaisons (densité ${densityLabel} : ${density.toFixed(1)} lien/nœud). ${densityMsg}`,
+    });
 
-    // 2) Leviers & couverture
-    if (causeImpact.ranked.length) {
-      const top = causeImpact.ranked[0];
-      const cov50 = causeImpact.pareto.find(p => p.cumulative >= 0.5)?.rank ?? "-";
-      const cov80 = causeImpact.pareto.find(p => p.cumulative >= 0.8)?.rank ?? "-";
-      lines.push(
-        `La cause la plus influente (« ${top.label} ») couvre ${top.impact} conséquence(s). ` +
-        `Les ${cov50} premières causes couvrent ~50% des conséquences; ` +
-        `les ${cov80} premières en couvrent ~80% (approx. Pareto).`
-      );
+    // 2. Concentration causale — loi de Pareto
+    if (causeImpact.ranked.length >= 2) {
+      const total = causeImpact.ranked.length;
+      const rank80 = (causeImpact.pareto.findIndex(p => p.cumulative >= 0.8) + 1) || total;
+      const pct80  = Math.round((rank80 / total) * 100);
+      const top    = causeImpact.ranked[0];
+      const concentrated = pct80 <= 30;
+      const balanced     = pct80 >= 60;
+      const verdict = concentrated
+        ? `Structure concentrée (${pct80}% des causes couvrent 80% des conséquences) : l’intervention doit prioriser ces leviers ou elle risque d’être inefficace.`
+        : balanced
+        ? `Distribution équilibrée (${pct80}% des causes pour 80% de couverture) : aucun levier dominant. L’action devra être large pour avoir de l’impact.`
+        : `Concentration modérée (${pct80}% des causes pour 80% de couverture) : quelques leviers clés émergent sans créer de dépendance excessive.`;
+      insights.push({
+        level: concentrated ? "warn" : "info",
+        title: "Concentration des risques",
+        text: `${verdict} Levier principal : « ${top.label} » (atteint ${top.impact} conséquence(s) sur ${causeImpact.totalConsequences}).`,
+      });
     }
 
-    // 3) Goulets
+    // 3. Quick wins
+    if (quickWins.length) {
+      const qw = quickWins[0];
+      insights.push({
+        level: "ok",
+        title: `${quickWins.length} quick win${quickWins.length > 1 ? "s" : ""} identifié${quickWins.length > 1 ? "s" : ""}`,
+        text: `« ${qw.label} » combine fort impact (${qw.impact} conséquences) et faible effort (indeg=${qw.effort}) — traiter en priorité pour générer des résultats visibles rapidement.${quickWins.length > 1 ? ` ${quickWins.length - 1} autre(s) dans le même profil.` : ""}`,
+      });
+    } else if (causeImpact.ranked.length > 0) {
+      insights.push({
+        level: "warn",
+        title: "Aucun quick win",
+        text: "Toutes les causes à fort impact exigent un effort élevé. L’intervention sera structurellement coûteuse — anticiper les délais et calibrer les ressources dès la conception.",
+      });
+    }
+
+    // 4. Goulet critique
     if (nodesStats.topFlow.length) {
       const g = nodesStats.topFlow[0];
-      lines.push(
-        `Un goulet significatif est « ${g.label} » (indeg=${g.indeg}, outdeg=${g.outdeg}) : ` +
-        `stabiliser ce point de passage augmentera l'effet de levier.`
-      );
+      const critical = g.flow >= 4;
+      insights.push({
+        level: critical ? "warn" : "info",
+        title: "Goulet d’étranglement",
+        text: `« ${g.label} » est un nœud de transit ${critical ? "critique" : "modéré"} (${g.indeg} entrée(s) → ${g.outdeg} sortie(s), flux≈${g.flow}). ${critical ? "Un blocage sur ce point paralyse une large portion de la chaîne causale. Sécuriser sa résolution est non négociable." : "À surveiller dans le séquençage de la mise en œuvre."}`,
+      });
     }
 
-    // 4) Propreté du graphe
-    if (counts.isolated.length) {
-      lines.push(`${counts.isolated.length} étiquette(s) isolée(s) à relier ou élaguer.`);
+    // 5. Couverture du diagnostic
+    const coverRate = counts.inTree / Math.max(1, counts.total);
+    if (coverRate < 0.65) {
+      insights.push({
+        level: "warn",
+        title: "Diagnostic partiel",
+        text: `${Math.round(coverRate * 100)}% des étiquettes sont intégrées (${counts.offTree} hors arbre). Des causes ou conséquences identifiées pendant le diagnostic restent déconnectées — risque d’omissions stratégiques dans l’arbre à objectifs.`,
+      });
     }
 
-    return lines.join(" ");
-  }, [counts, causeImpact, nodesStats]);
+    // 6. Hygiène analytique
+    const hygIssues = [];
+    if (duplicates.length > 0) hygIssues.push(`${duplicates.length} doublon(s) (formulations quasi-identiques à fusionner)`);
+    if (counts.isolated.length > 0) hygIssues.push(`${counts.isolated.length} nœud(s) isolé(s) sans connexion`);
+    if (hygIssues.length) {
+      insights.push({
+        level: "warn",
+        title: "Qualité du graphe à améliorer",
+        text: `${hygIssues.join(" ; ")}. Ces imperfections biaisent les métriques et brouillent la lecture stratégique.`,
+      });
+    }
+
+    return insights;
+  }, [counts, causeImpact, quickWins, nodesStats, duplicates]);
 
   const initialSummary = useMemo(() => {
-    const lines = [];
-    lines.push("SYNTHÈSE IA — Analyse interprétative (éditable)");
-    lines.push("");
-    lines.push("Résumé exécutif :");
-    lines.push("• " + executiveSummary);
-    lines.push("");
-
-    // Leviers
+    const lines = ["SYNTHÈSE — Analyse interprétative (éditable)", ""];
+    executiveSummary.forEach((ins) => {
+      lines.push(`[${ins.level === "ok" ? "✓" : ins.level === "warn" ? "⚠" : "ℹ"}] ${ins.title}`);
+      lines.push(`   ${ins.text}`);
+      lines.push("");
+    });
     if (causeImpact.ranked.length) {
-      lines.push("Leviers prioritaires (impact sur les conséquences) :");
-      causeImpact.ranked.slice(0, 5).forEach((c, i) => {
-        lines.push(`  ${i + 1}. ${c.label} — impact: ${c.impact}, effort (proxy): ${c.effort}`);
-      });
+      lines.push("Leviers prioritaires :");
+      causeImpact.ranked.slice(0, 5).forEach((c, i) =>
+        lines.push(`  ${i + 1}. ${c.label} — ${c.impact} conséquence(s), effort proxy=${c.effort}`)
+      );
       lines.push("");
     }
-
-    // Quick wins
     if (quickWins.length) {
-      lines.push("Quick wins (fort impact, faible effort) :");
+      lines.push("Quick wins :");
       quickWins.forEach((c) => lines.push(`  • ${c.label} (impact=${c.impact}, effort=${c.effort})`));
       lines.push("");
     }
-
-    // Goulets
     if (nodesStats.topFlow.length) {
-      lines.push("Goulets (points de passage structurants) :");
-      nodesStats.topFlow.slice(0, 5).forEach((n) =>
+      lines.push("Goulets :");
+      nodesStats.topFlow.slice(0, 3).forEach((n) =>
         lines.push(`  • ${n.label} (indeg=${n.indeg}, outdeg=${n.outdeg}, flux≈${n.flow})`)
       );
       lines.push("");
     }
-
-    // Risques et hygiène
-    if (duplicates.length) {
-      lines.push(`Doublons potentiels détectés (${duplicates.length} paires) : examiner et fusionner si nécessaire.`);
-    }
-    if (counts.isolated.length) {
-      lines.push(`Étiquettes isolées : ${counts.isolated.length} à relier/retirer.`);
-    }
-
-    // Plan d’action (générique)
-    lines.push("");
-    lines.push("Plan d’action recommandé :");
-    lines.push("1) Immédiat : traiter 2–3 quick wins pour gagner de la traction.");
-    lines.push("2) Court terme : adresser les 3 leviers majeurs (impact) et sécuriser le principal goulet.");
-    lines.push("3) Structurel : réduire la redondance (fusion doublons), relier/élaguer les isolés, puis affiner les chaînes causes→conséquences.");
-
+    lines.push("Actions recommandées :");
+    lines.push("1) Immédiat (0–3 mois) : traiter les quick wins identifiés.");
+    lines.push("2) Court terme (3–12 mois) : adresser les 3 leviers majeurs et sécuriser le goulet principal.");
+    lines.push("3) Structurel (1 an+) : fusionner les doublons, relier les isolés, affiner les chaînes causales.");
     return lines.join("\n");
-  }, [executiveSummary, causeImpact, quickWins, nodesStats, duplicates, counts]);
+  }, [executiveSummary, causeImpact, quickWins, nodesStats]);
 
   const [summary, setSummary] = useState(initialSummary);
   useEffect(() => setSummary(initialSummary), [initialSummary]);
@@ -636,9 +670,36 @@ export default function AnalysisPanel({
         </div>
       </div>
 
-      {/* Résumé exécutif */}
+      {/* Résumé exécutif analytique */}
       <Card title="Résumé exécutif">
-        <div className="text-sm leading-6">{executiveSummary}</div>
+        {executiveSummary.length === 0 ? (
+          <div className="text-sm text-slate-400 italic">Ajoutez des étiquettes à l'arbre pour générer le résumé.</div>
+        ) : (
+          <div className="space-y-2">
+            {executiveSummary.map((ins, i) => (
+              <div
+                key={i}
+                className={`flex gap-3 p-2.5 rounded-lg text-sm border ${
+                  ins.level === "ok"   ? "bg-emerald-50 border-emerald-200" :
+                  ins.level === "warn" ? "bg-amber-50 border-amber-200" :
+                                         "bg-sky-50 border-sky-200"
+                }`}
+              >
+                <span className={`shrink-0 text-base font-bold ${
+                  ins.level === "ok" ? "text-emerald-600" : ins.level === "warn" ? "text-amber-600" : "text-sky-600"
+                }`}>
+                  {ins.level === "ok" ? "✓" : ins.level === "warn" ? "⚠" : "ℹ"}
+                </span>
+                <div>
+                  <span className={`font-semibold ${
+                    ins.level === "ok" ? "text-emerald-800" : ins.level === "warn" ? "text-amber-800" : "text-sky-800"
+                  }`}>{ins.title} — </span>
+                  <span className="text-slate-700">{ins.text}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </Card>
 
       {/* Tabs */}
