@@ -1640,6 +1640,10 @@ export default function App() {
             connections={connections}
             projectName={projectName}
             theme={theme}
+            aiConfig={aiConfig}
+            objectiveNodes={objectiveNodes}
+            objectiveConnections={objectiveConnections}
+            strategies={strategies}
           />
         </div>
       </div>

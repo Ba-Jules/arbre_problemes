@@ -6,6 +6,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { analyzeWithAI } from "../lib/aiTransformer";
 import {
   ResponsiveContainer,
   BarChart,
@@ -41,9 +42,18 @@ export default function AnalysisPanel({
   connections = [],
   projectName = "",
   theme = "",
+  aiConfig = null,
+  objectiveNodes = [],
+  objectiveConnections = [],
+  strategies = [],
 }) {
   const containerRef = useRef(null);
-  const [tab, setTab] = useState("overview"); // 'overview' | 'causes' | 'consequences' | 'structure' | 'reco'
+  const [tab, setTab] = useState("overview");
+
+  /* ─── État analyse IA ─── */
+  const [aiAnalysis, setAiAnalysis]     = useState("");
+  const [aiAnalyzing, setAiAnalyzing]   = useState(false);
+  const [aiAnalysisErr, setAiAnalysisErr] = useState("");
 
   /* ===================== Couleurs (alignées avec l'app) ===================== */
   const COLORS = {
@@ -481,6 +491,70 @@ export default function AnalysisPanel({
     [causeImpact]
   );
 
+  /* ===================== Analyse IA ===================== */
+  const handleAIAnalysis = useCallback(async () => {
+    if (!aiConfig?.configured) return;
+    setAiAnalyzing(true);
+    setAiAnalysisErr("");
+    setTab("ai");
+
+    // Données objectives
+    const objCentral = objectiveNodes.find((n) => n.objectiveType === "central");
+    const objMeans   = objectiveNodes.filter((n) => n.objectiveType === "means");
+    const objEnds    = objectiveNodes.filter((n) => n.objectiveType === "ends");
+
+    // Stratégies enrichies avec libellés des moyens
+    const nodeById = Object.fromEntries(objectiveNodes.map((n) => [n.id, n]));
+    const strategiesEnriched = strategies.map((s) => ({
+      name:          s.name,
+      colorLabel:    s.color?.label,
+      rationale:     s.rationale,
+      score:         s.score,
+      impact:        s.impact,
+      meansContents: (s.nodes || [])
+        .map((id) => nodeById[id])
+        .filter((n) => n?.objectiveType === "means")
+        .map((n) => n.content),
+    }));
+
+    const payload = {
+      projectName,
+      theme,
+      counts: {
+        total:        counts.total,
+        links:        counts.links,
+        inTree:       counts.inTree,
+        offTree:      counts.offTree,
+        causes:       counts.cats.causes,
+        consequences: counts.cats.consequences,
+        problem:      counts.cats.problem,
+        isolated:     counts.isolated.length,
+      },
+      depthByCat:    depthInfo.depthByCat,
+      topCauses:     causeImpact.ranked.slice(0, 10),
+      quickWins,
+      topBottlenecks: nodesStats.topFlow.slice(0, 6),
+      duplicates,
+      sampleChains,
+      objectiveTree: objCentral ? {
+        central: objCentral.content,
+        means:   objMeans.map((m) => ({ content: m.content, validationStatus: m.validation?.status })),
+        ends:    objEnds.map((e)  => ({ content: e.content })),
+      } : null,
+      strategies: strategiesEnriched,
+    };
+
+    try {
+      const result = await analyzeWithAI(payload, aiConfig);
+      setAiAnalysis(result);
+    } catch (err) {
+      setAiAnalysisErr(err.message);
+    } finally {
+      setAiAnalyzing(false);
+    }
+  }, [aiConfig, projectName, theme, counts, depthInfo, causeImpact, quickWins,
+      nodesStats, duplicates, sampleChains, objectiveNodes, strategies]);
+
   /* ===================== Actions ===================== */
   const copySummary = useCallback(async () => {
     try {
@@ -528,7 +602,19 @@ export default function AnalysisPanel({
             {theme ? " — " + theme : ""}
           </div>
         )}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2 flex-wrap">
+          {aiConfig?.configured ? (
+            <button
+              className="px-3 py-1 rounded bg-violet-700 text-white text-sm font-semibold disabled:opacity-60"
+              onClick={handleAIAnalysis}
+              disabled={aiAnalyzing}
+              title="Analyse experte complète par l'IA (arbre problèmes + objectifs + stratégies)"
+            >
+              {aiAnalyzing ? "Analyse en cours…" : "✦ Analyser avec l'IA"}
+            </button>
+          ) : (
+            <span className="text-xs text-slate-400 italic">Configurez un provider IA pour l'analyse experte</span>
+          )}
           <button
             className="px-3 py-1 rounded bg-slate-200 text-slate-800 text-sm"
             onClick={() => setSummary(initialSummary)}
@@ -545,7 +631,7 @@ export default function AnalysisPanel({
             className="px-3 py-1 rounded bg-indigo-600 text-white text-sm"
             onClick={exportPDF}
           >
-            Télécharger en PDF
+            PDF
           </button>
         </div>
       </div>
@@ -563,6 +649,7 @@ export default function AnalysisPanel({
           ["consequences", "Conséquences"],
           ["structure", "Structure"],
           ["reco", "Recommandations"],
+          ["ai", aiAnalyzing ? "Analyse IA…" : aiAnalysis ? "Analyse IA ✓" : "Analyse IA ✦"],
         ].map(([id, label]) => (
           <button
             key={id}
@@ -799,6 +886,20 @@ export default function AnalysisPanel({
         </>
       )}
 
+      {tab === "ai" && (
+        <AIAnalysisTab
+          analyzing={aiAnalyzing}
+          analysis={aiAnalysis}
+          error={aiAnalysisErr}
+          configured={!!aiConfig?.configured}
+          onLaunch={handleAIAnalysis}
+          onCopy={async () => {
+            try { await navigator.clipboard.writeText(aiAnalysis); alert("Analyse copiée ✅"); }
+            catch { window.prompt("Copiez :", aiAnalysis); }
+          }}
+        />
+      )}
+
       {tab === "reco" && (
         <>
           <Card title="Recommandations actionnables">
@@ -857,6 +958,158 @@ export default function AnalysisPanel({
         </>
       )}
     </div>
+  );
+}
+
+/* ===================== Onglet Analyse IA ===================== */
+
+function AIAnalysisTab({ analyzing, analysis, error, configured, onLaunch, onCopy }) {
+  if (!configured) {
+    return (
+      <Card title="Analyse IA experte">
+        <div className="py-8 text-center text-slate-500 text-sm">
+          <div className="text-2xl mb-3">🔑</div>
+          <p>Configurez un provider IA (OpenAI, Anthropic, Google, OpenRouter)</p>
+          <p className="mt-1 text-xs text-slate-400">L'analyse couvrira l'arbre à problèmes, l'arbre à objectifs et les stratégies.</p>
+        </div>
+      </Card>
+    );
+  }
+  if (analyzing) {
+    return (
+      <Card title="Analyse IA experte">
+        <div className="py-10 text-center">
+          <div className="inline-block w-8 h-8 border-4 border-violet-600 border-t-transparent rounded-full animate-spin mb-4" />
+          <p className="text-sm text-slate-600">Analyse en cours — l'IA lit l'arbre, les chaînes causales et les stratégies…</p>
+          <p className="text-xs text-slate-400 mt-1">Durée estimée : 15–40 secondes selon le provider</p>
+        </div>
+      </Card>
+    );
+  }
+  if (error) {
+    return (
+      <Card title="Analyse IA experte">
+        <div className="p-3 bg-red-50 border border-red-200 rounded mb-3 text-sm text-red-700">
+          ✗ Erreur : {error}
+        </div>
+        <button
+          className="px-3 py-1.5 rounded bg-violet-700 text-white text-sm font-semibold"
+          onClick={onLaunch}
+        >Réessayer</button>
+      </Card>
+    );
+  }
+  if (!analysis) {
+    return (
+      <Card title="Analyse IA experte">
+        <div className="py-8 text-center">
+          <p className="text-sm text-slate-600 mb-4">
+            L'IA analysera simultanément le diagnostic causal, l'arbre à objectifs et les stratégies d'intervention.
+          </p>
+          <ul className="text-xs text-slate-500 text-left inline-block mb-5 space-y-1">
+            <li>✦ Qualité du diagnostic causal (exhaustivité, cohérence, angles manquants)</li>
+            <li>✦ Solidité logique de l'arbre à objectifs (chaînes, sauts logiques)</li>
+            <li>✦ Analyse critique des stratégies (pertinence, chevauchements, recommandation)</li>
+            <li>✦ Risques et hypothèses critiques non modélisés</li>
+            <li>✦ Recommandations opérationnelles sur 3 horizons</li>
+            <li>✦ Score de qualité global /10 avec sous-scores</li>
+          </ul>
+          <br />
+          <button
+            className="px-4 py-2 rounded-lg bg-violet-700 text-white font-semibold text-sm"
+            onClick={onLaunch}
+          >✦ Lancer l'analyse experte</button>
+        </div>
+      </Card>
+    );
+  }
+  return (
+    <Card title="Analyse IA experte">
+      <div className="flex justify-end gap-2 mb-3">
+        <button
+          className="px-3 py-1 rounded bg-slate-200 text-slate-700 text-xs"
+          onClick={onLaunch}
+        >↺ Relancer</button>
+        <button
+          className="px-3 py-1 rounded bg-slate-200 text-slate-700 text-xs"
+          onClick={onCopy}
+        >Copier</button>
+      </div>
+      <MarkdownText text={analysis} />
+    </Card>
+  );
+}
+
+function MarkdownText({ text }) {
+  if (!text) return null;
+  const lines = text.split("\n");
+  const elements = [];
+  let listItems = [];
+
+  const flushList = (key) => {
+    if (!listItems.length) return;
+    elements.push(
+      <ul key={`ul-${key}`} className="list-disc pl-5 space-y-0.5 mb-2 text-sm text-slate-700">
+        {listItems.map((item, j) => (
+          <li key={j}><InlineText text={item} /></li>
+        ))}
+      </ul>
+    );
+    listItems = [];
+  };
+
+  lines.forEach((line, i) => {
+    if (line.startsWith("## ")) {
+      flushList(i);
+      elements.push(
+        <h3 key={i} className="text-sm font-bold text-slate-900 mt-5 mb-1.5 pb-1 border-b border-slate-200 uppercase tracking-wide">
+          {line.slice(3)}
+        </h3>
+      );
+    } else if (line.startsWith("### ")) {
+      flushList(i);
+      elements.push(
+        <h4 key={i} className="text-sm font-bold text-violet-700 mt-3 mb-1">
+          {line.slice(4)}
+        </h4>
+      );
+    } else if (line.startsWith("**") && line.endsWith("**") && line.length > 4) {
+      flushList(i);
+      elements.push(
+        <p key={i} className="text-sm font-bold text-slate-800 mt-4 mb-1">
+          <InlineText text={line.slice(2, -2)} />
+        </p>
+      );
+    } else if (line.startsWith("- ") || line.startsWith("  - ") || line.startsWith("   - ")) {
+      listItems.push(line.replace(/^\s*-\s/, ""));
+    } else if (line === "---") {
+      flushList(i);
+      elements.push(<hr key={i} className="my-4 border-slate-200" />);
+    } else if (line.trim() === "") {
+      flushList(i);
+    } else {
+      flushList(i);
+      elements.push(
+        <p key={i} className="text-sm text-slate-700 mb-1.5 leading-6">
+          <InlineText text={line} />
+        </p>
+      );
+    }
+  });
+  flushList("end");
+  return <div>{elements}</div>;
+}
+
+function InlineText({ text = "" }) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return (
+    <>
+      {parts.map((p, i) =>
+        p.startsWith("**") && p.endsWith("**") && p.length > 4
+          ? <strong key={i} className="font-semibold text-slate-900">{p.slice(2, -2)}</strong>
+          : p
+      )}
+    </>
   );
 }
 
