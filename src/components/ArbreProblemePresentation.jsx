@@ -283,30 +283,24 @@ const ArbreProblemePresentation = ({
       content: (
         <div className="space-y-3">
 
-          {/* ── Pipeline 4 étapes ── */}
-          <div className="relative">
-            {/* Ligne de connexion (desktop) — centrée sur les cercles w-8 = 16px */}
-            <div
-              className="hidden md:block absolute h-px z-0"
-              style={{ top: "16px", left: "calc(12.5% + 16px)", right: "calc(12.5% + 16px)", background: "linear-gradient(to right, #f9a8d4, #a78bfa, #818cf8, #6ee7b7)" }}
-            />
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 relative z-10">
-              {[
-                { n: 1, icon: "🔍", bg: "bg-pink-500",    ring: "ring-pink-100",    light: "bg-pink-50 border-pink-100",    text: "text-pink-800",    title: "Identifier",  desc: "Lister causes, problèmes et conséquences" },
-                { n: 2, icon: "🔗", bg: "bg-violet-500",  ring: "ring-violet-100",  light: "bg-violet-50 border-violet-100",text: "text-violet-800",  title: "Connecter",   desc: "Tracer les liens causaux de bas en haut" },
-                { n: 3, icon: "✦",  bg: "bg-indigo-500",  ring: "ring-indigo-100",  light: "bg-indigo-50 border-indigo-100",text: "text-indigo-800",  title: "Transformer", desc: "Chaque problème → objectif positif" },
-                { n: 4, icon: "🎯", bg: "bg-emerald-500", ring: "ring-emerald-100", light: "bg-emerald-50 border-emerald-100",text: "text-emerald-800",title: "Planifier",   desc: "Construire les stratégies GAR" },
-              ].map((s) => (
-                <div key={s.n} className={`flex flex-col items-center gap-1.5 p-2.5 rounded-xl border ${s.light} text-center`}>
-                  <div className={`w-8 h-8 rounded-full ${s.bg} text-white text-xs font-black flex items-center justify-center ring-2 ${s.ring} shadow-sm`}>
+          {/* ── Pipeline 4 étapes — une seule ligne de pills ── */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {[
+              { n: 1, bg: "bg-pink-500",    light: "bg-pink-50 border-pink-200",    text: "text-pink-800",    title: "Identifier"  },
+              { n: 2, bg: "bg-violet-500",  light: "bg-violet-50 border-violet-200",text: "text-violet-800",  title: "Connecter"   },
+              { n: 3, bg: "bg-indigo-500",  light: "bg-indigo-50 border-indigo-200",text: "text-indigo-800",  title: "Transformer" },
+              { n: 4, bg: "bg-emerald-500", light: "bg-emerald-50 border-emerald-200",text: "text-emerald-800",title: "Planifier"   },
+            ].map((s, i) => (
+              <React.Fragment key={s.n}>
+                <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border ${s.light}`}>
+                  <span className={`w-4 h-4 rounded-full ${s.bg} text-white text-[10px] font-black flex items-center justify-center shrink-0`}>
                     {s.n}
-                  </div>
-                  <span className="text-sm leading-none">{s.icon}</span>
-                  <p className={`text-[11px] font-bold ${s.text} leading-tight`}>{s.title}</p>
-                  <p className="text-[10px] text-gray-500 leading-snug">{s.desc}</p>
+                  </span>
+                  <span className={`text-[11px] font-bold ${s.text}`}>{s.title}</span>
                 </div>
-              ))}
-            </div>
+                {i < 3 && <span className="text-gray-300 text-xs font-bold">→</span>}
+              </React.Fragment>
+            ))}
           </div>
 
           {/* ── Comparaison avant / après ── */}
@@ -319,7 +313,7 @@ const ArbreProblemePresentation = ({
                 <p className="text-[11px] font-bold text-gray-600 uppercase tracking-wider">Arbre à Problèmes</p>
                 <span className="ml-auto text-[10px] text-gray-400 italic">Diagnostic</span>
               </div>
-              <div className="rounded-lg overflow-hidden border-2 border-red-100 shadow-md" style={{ maxHeight: "130px" }}>
+              <div className="rounded-lg overflow-hidden border-2 border-red-100 shadow-md" style={{ maxHeight: "190px" }}>
                 <SmartImage
                   sources={IMG_PROBLEME_SOURCES}
                   alt="Arbre à problèmes"
@@ -354,7 +348,7 @@ const ArbreProblemePresentation = ({
                 <p className="text-[11px] font-bold text-gray-600 uppercase tracking-wider">Arbre à Objectifs</p>
                 <span className="ml-auto text-[10px] text-gray-400 italic">Projection</span>
               </div>
-              <div className="rounded-lg overflow-hidden border-2 border-emerald-100 shadow-md" style={{ maxHeight: "130px" }}>
+              <div className="rounded-lg overflow-hidden border-2 border-emerald-100 shadow-md" style={{ maxHeight: "190px" }}>
                 <SmartImage
                   sources={IMG_OBJECTIFS_SOURCES}
                   alt="Exemple d'arbre à objectifs"
