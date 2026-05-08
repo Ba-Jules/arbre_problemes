@@ -17,7 +17,6 @@ function SmartImage({ sources = [], alt = "", className = "" }) {
       className={className}
       loading="lazy"
       decoding="async"
-      crossOrigin="anonymous"
       onError={() => setIdx((i) => i + 1)}
     />
   );
@@ -646,7 +645,7 @@ const ArbreProblemePresentation = ({
               </button>
               <div className="p-5 md:p-7">
                 <div className="aspect-video bg-gray-100 rounded-xl overflow-hidden">
-                  <video className="w-full h-full" controls playsInline preload="metadata" crossOrigin="anonymous">
+                  <video className="w-full h-full" controls playsInline preload="metadata">
                     {VIDEO_SOURCES.map((src) => (
                       <source key={src} src={src} type="video/mp4" />
                     ))}
