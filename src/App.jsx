@@ -895,16 +895,15 @@ export default function App() {
             chainsData, aiConfig,
             (evt) => setAiDebugLog((prev) => [...prev, evt])
           );
-          const { centralId, endIds } = chainsData;
           const result = aiResult.map((s, i) => ({
-            id:       `strategy-${i + 1}`,
-            name:     s.name,
+            id:        `strategy-${i + 1}`,
+            name:      s.name,
             rationale: s.rationale,
-            nodes:    [...(s.nodeIds || []), ...(centralId ? [centralId] : []), ...endIds],
-            color:    STRATEGY_COLORS[i % STRATEGY_COLORS.length],
-            score:    null,
-            impact:   endIds.length,
-            length:   (s.nodeIds || []).length,
+            nodes:     [...(s.nodeIds || []), ...(s.primaryEndId ? [s.primaryEndId] : [])],
+            color:     STRATEGY_COLORS[i % STRATEGY_COLORS.length],
+            score:     null,
+            impact:    s.primaryEndId ? 1 : 0,
+            length:    (s.nodeIds || []).length,
           }));
           setStrategies(result);
           setShowStrategies(true);
@@ -1077,6 +1076,19 @@ export default function App() {
     return map;
   }, [strategies, showStrategies]);
 
+  // Moyens directement connectés au nœud central (passerelles = porteurs du badge stratégie)
+  const gatewayMeansIds = useMemo(() => {
+    const central = objectiveNodes.find((n) => n.objectiveType === "central");
+    if (!central) return new Set();
+    const adj = new Set(
+      objectiveConnections
+        .filter((c) => c.fromId === central.id || c.toId === central.id)
+        .flatMap((c) => [c.fromId, c.toId])
+    );
+    adj.delete(central.id);
+    return new Set(objectiveNodes.filter((n) => n.objectiveType === "means" && adj.has(n.id)).map((n) => n.id));
+  }, [objectiveNodes, objectiveConnections]);
+
   /** Couleur du point de statut de validation */
   const VALIDATION_DOT = {
     generated: "#94a3b8",   // slate  – généré, non relu
@@ -1181,8 +1193,11 @@ export default function App() {
             outline: outlineStyle,
           }}
         >
-          {/* Badge stratégie */}
+          {/* Badge stratégie — affiché uniquement sur le moyen passerelle et la fin sélectionnée */}
           {strategy && !exportMode && (
+            (n.objectiveType === "means" && gatewayMeansIds.has(n.id)) ||
+            n.objectiveType === "ends"
+          ) && (
             <div
               className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded-full text-[8px] font-black uppercase tracking-wider whitespace-nowrap pointer-events-none"
               style={{ backgroundColor: strategy.color.bg, color: strategy.color.text }}

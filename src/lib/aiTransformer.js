@@ -248,13 +248,13 @@ export async function detectStrategiesWithAI(chainsData, config, onDebug) {
     ...means.map((m, i) => `  ${i + 1}. [${m.id}] "${m.content}"`),
     ``,
     `FINS ATTENDUES (${ends.length}) :`,
-    ...ends.map((e, i) => `  ${i + 1}. "${e.content}"`),
+    ...ends.map((e, i) => `  ${i + 1}. [${e.id}] "${e.content}"`),
   ];
 
   if (chains?.length > 0) {
     lines.push(``, `CHAÎNES D'INTERVENTION COMPLÈTES (moyen(s) → objectif central → fin(s)) :`);
     chains.forEach((c, i) => {
-      lines.push(`  Chaîne ${i + 1} [IDs concernés : ${c.meansIds.join(", ")}]`);
+      lines.push(`  Chaîne ${i + 1} [IDs moyens : ${c.meansIds.join(", ")}]`);
       lines.push(`    ${c.path}`);
     });
   }
@@ -268,14 +268,18 @@ export async function detectStrategiesWithAI(chainsData, config, onDebug) {
   const minStrat = means.length <= 2 ? 1 : 2;
   lines.push(
     ``,
-    `INSTRUCTION : Regroupe ces ${means.length} moyen(s) en ${minStrat} à ${maxStrat} stratégies`,
-    `d'intervention thématiquement homogènes (1 logique = 1 stratégie : ex. RH, outils, organisation).`,
-    `Chaque moyen appartient à exactement une stratégie.`,
-    `Supprime une stratégie si elle n'est pas clairement distincte des autres.`,
-    `Utilise les IDs exacts entre crochets — ne les modifie pas.`,
+    `INSTRUCTION : Propose ${minStrat} à ${maxStrat} chaînes d'intervention cohérentes et DISTINCTES.`,
+    `Chaque chaîne = un groupe de moyens thématiquement homogènes + la fin la plus logiquement liée.`,
+    `Règles :`,
+    `  - Chaque moyen appartient à exactement une chaîne.`,
+    `  - Pour chaque chaîne, choisis la FIN (primaryEndId) la plus pertinente parmi les fins listées.`,
+    `  - Si deux fins sont équivalentes, donne priorité à celle qui complète le mieux la logique de la chaîne.`,
+    `  - Les chaînes doivent être DISTINCTES : thèmes différents, fins différentes si possible.`,
+    `  - Supprime une chaîne si elle n'est pas clairement distincte des autres.`,
+    `  - Utilise les IDs exacts entre crochets — ne les modifie pas.`,
     ``,
     `Réponds UNIQUEMENT avec ce JSON valide (en français), rien d'autre :`,
-    `[{"name": "Nom 3-5 mots", "nodeIds": ["id_exact_1", "id_exact_2"], "rationale": "1 phrase sur la logique thématique commune"}]`
+    `[{"name": "Nom 3-5 mots", "nodeIds": ["id_moyen_1", "id_moyen_2"], "primaryEndId": "id_fin_exact", "rationale": "1 phrase : logique moyen(s) → fin"}]`
   );
 
   const messages = [

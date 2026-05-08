@@ -299,11 +299,9 @@ export function detectStrategies(nodes, connections, maxCount = 3) {
       cluster, allReachableEnds, validatedIds, endsSet.size, meansSet.size
     );
 
-    const strategyNodes = [
-      ...cluster,
-      ...(centralId ? [centralId] : []),
-      ...allReachableEnds,
-    ];
+    // Nœud central et fins exclus : chaque stratégie ne porte que ses moyens.
+    // Le badge ne s'affiche que sur les moyens passerelles (connectés au central).
+    const strategyNodes = [...cluster];
 
     allCandidates.push({ cluster, nodes: strategyNodes, endsCovered, length, score });
   }
